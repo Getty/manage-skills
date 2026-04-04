@@ -1,0 +1,643 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+VERSION="0.1.0"
+CONFIG_DIR="${MANAGE_SKILLS_HOME:-$HOME/.manage-skills}"
+SOURCES_FILE="$CONFIG_DIR/sources"
+TARGETS_FILE="$CONFIG_DIR/targets"
+
+# Colors (disabled if not a terminal)
+if [[ -t 1 ]]; then
+  BOLD=$'\033[1m' DIM=$'\033[2m' GREEN=$'\033[32m' YELLOW=$'\033[33m'
+  CYAN=$'\033[36m' RED=$'\033[31m' RESET=$'\033[0m'
+else
+  BOLD='' DIM='' GREEN='' YELLOW='' CYAN='' RED='' RESET=''
+fi
+
+die() { echo "${RED}error:${RESET} $*" >&2; exit 1; }
+info() { echo "${CYAN}$*${RESET}"; }
+warn() { echo "${YELLOW}$*${RESET}"; }
+shorten() { echo "${1//$HOME/\~}"; }
+
+# ── Config ──────────────────────────────────────────────────────────
+
+ensure_config() {
+  [[ -d "$CONFIG_DIR" ]] && return
+  mkdir -p "$CONFIG_DIR"
+  info "Created $CONFIG_DIR"
+  # Write default target
+  echo "claude:.claude/skills:SKILL.md" > "$TARGETS_FILE"
+  info "Default target: claude (.claude/skills/SKILL.md)"
+  # Empty sources file with comment
+  cat > "$SOURCES_FILE" << 'SOURCES'
+# manage-skills source directories
+# One directory per line. These are scanned for skill files.
+# Lines starting with # are ignored. ~ is expanded.
+#
+# Example:
+# ~/dev/shared-skills
+# ~/dev/perl/shared-skills
+SOURCES
+  warn "No sources configured yet. Run: manage-skills sources add ~/dev/shared-skills"
+}
+
+expand_path() {
+  local p="$1"
+  p="${p/#\~/$HOME}"
+  echo "$p"
+}
+
+read_sources() {
+  [[ -f "$SOURCES_FILE" ]] || return
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    local expanded
+    expanded=$(expand_path "$line")
+    [[ -d "$expanded" ]] && echo "$expanded"
+  done < "$SOURCES_FILE"
+}
+
+read_targets() {
+  [[ -f "$TARGETS_FILE" ]] || return
+  while IFS=: read -r name path file; do
+    [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
+    echo "$name:$path:$file"
+  done < "$TARGETS_FILE"
+}
+
+get_target() {
+  local want="${1:-claude}"
+  while IFS=: read -r name path file; do
+    [[ "$name" == "$want" ]] && echo "$path:$file" && return
+  done < <(read_targets)
+  die "Unknown target '$want'. Check $TARGETS_FILE"
+}
+
+# ── Skill Discovery ─────────────────────────────────────────────────
+
+# Find all skills across all sources. Output: source_dir:skill_name
+# Deduplicates by skill name — first source wins (so order in sources file matters).
+discover_skills() {
+  local target_file="${1:-SKILL.md}"
+  local -A seen=()
+  while IFS= read -r source_dir; do
+    for skill_dir in "$source_dir"/*/; do
+      [[ -f "$skill_dir/$target_file" ]] || continue
+      local skill_name
+      skill_name=$(basename "$skill_dir")
+      # Skip if we already found this skill in an earlier source
+      [[ -n "${seen[$skill_name]:-}" ]] && continue
+      seen[$skill_name]=1
+      echo "$source_dir:$skill_name"
+    done
+  done < <(read_sources)
+}
+
+# Check if a skill file in the project is a hardlink to the source
+is_hardlinked() {
+  local project_file="$1"
+  local source_file="$2"
+  [[ -f "$project_file" ]] || return 1
+  [[ -f "$source_file" ]] || return 1
+  local inode_p inode_s
+  inode_p=$(stat -c %i "$project_file" 2>/dev/null || stat -f %i "$project_file" 2>/dev/null)
+  inode_s=$(stat -c %i "$source_file" 2>/dev/null || stat -f %i "$source_file" 2>/dev/null)
+  [[ "$inode_p" == "$inode_s" ]]
+}
+
+# ── Commands ─────────────────────────────────────────────────────────
+
+cmd_init() {
+  ensure_config
+  if [[ -f "$SOURCES_FILE" ]] && grep -qv '^#' "$SOURCES_FILE" 2>/dev/null; then
+    info "Config already exists at $CONFIG_DIR"
+  fi
+  echo ""
+  info "Next steps:"
+  echo "  manage-skills sources add ~/dev/shared-skills"
+  echo "  manage-skills sources add ~/dev/perl/shared-skills"
+  echo "  cd ~/your-project && manage-skills"
+}
+
+cmd_sources() {
+  local subcmd="${1:-list}"
+  shift 2>/dev/null || true
+
+  case "$subcmd" in
+    list)
+      if [[ ! -f "$SOURCES_FILE" ]]; then
+        warn "No sources configured. Run: manage-skills init"
+        return
+      fi
+      echo "${BOLD}Skill sources:${RESET}"
+      while IFS= read -r line; do
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        local expanded
+        expanded=$(expand_path "$line")
+        if [[ -d "$expanded" ]]; then
+          local count
+          count=$(find "$expanded" -maxdepth 2 -name "*.md" -type f 2>/dev/null | wc -l)
+          echo "  ${GREEN}●${RESET} $line  ${DIM}($count skills)${RESET}"
+        else
+          echo "  ${RED}●${RESET} $line  ${DIM}(not found)${RESET}"
+        fi
+      done < "$SOURCES_FILE"
+      ;;
+    add)
+      [[ -z "${1:-}" ]] && die "Usage: manage-skills sources add <directory>"
+      local dir="$1"
+      local expanded
+      expanded=$(expand_path "$dir")
+      [[ -d "$expanded" ]] || die "Directory not found: $expanded"
+      # Check if already in sources
+      if grep -qF "$dir" "$SOURCES_FILE" 2>/dev/null; then
+        warn "Already in sources: $dir"
+        return
+      fi
+      echo "$dir" >> "$SOURCES_FILE"
+      info "Added: $dir"
+      ;;
+    remove)
+      [[ -z "${1:-}" ]] && die "Usage: manage-skills sources remove <directory>"
+      local dir="$1"
+      local tmp
+      tmp=$(mktemp)
+      grep -vF "$dir" "$SOURCES_FILE" > "$tmp" || true
+      mv "$tmp" "$SOURCES_FILE"
+      info "Removed: $dir"
+      ;;
+    *)
+      die "Unknown sources command: $subcmd (use list, add, remove)"
+      ;;
+  esac
+}
+
+cmd_targets() {
+  local subcmd="${1:-list}"
+  shift 2>/dev/null || true
+
+  case "$subcmd" in
+    list)
+      echo "${BOLD}Configured targets:${RESET}"
+      while IFS=: read -r name path file; do
+        [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
+        echo "  ${GREEN}$name${RESET}  →  $path/$file"
+      done < <(read_targets)
+      ;;
+    add)
+      [[ -z "${1:-}" || -z "${2:-}" || -z "${3:-}" ]] && die "Usage: manage-skills targets add <name> <path> <file>"
+      echo "$1:$2:$3" >> "$TARGETS_FILE"
+      info "Added target: $1 → $2/$3"
+      ;;
+    *)
+      die "Unknown targets command: $subcmd (use list, add)"
+      ;;
+  esac
+}
+
+cmd_list() {
+  local target_name="${1:-claude}"
+  local target_info
+  target_info=$(get_target "$target_name")
+  local target_path="${target_info%%:*}"
+  local target_file="${target_info##*:}"
+
+  local project_skills_dir="$PWD/$target_path"
+
+  echo "${BOLD}Available skills${RESET} ${DIM}(target: $target_name)${RESET}"
+  echo ""
+
+  local has_skills=false
+  while IFS=: read -r source_dir skill_name; do
+    has_skills=true
+    local source_file="$source_dir/$skill_name/$target_file"
+    local project_file="$project_skills_dir/$skill_name/$target_file"
+
+    local short_source="$(shorten "$source_dir")"
+    if [[ -f "$project_file" ]]; then
+      if is_hardlinked "$project_file" "$source_file"; then
+        echo "  ${GREEN}[*]${RESET} $skill_name  ${DIM}← $short_source${RESET}"
+      else
+        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(local copy, not linked)${RESET}"
+      fi
+    else
+      echo "  ${DIM}[ ]${RESET} $skill_name  ${DIM}← $short_source${RESET}"
+    fi
+  done < <(discover_skills "$target_file")
+
+  # Show originals (skills in project that aren't from any source)
+  if [[ -d "$project_skills_dir" ]]; then
+    for skill_dir in "$project_skills_dir"/*/; do
+      [[ -f "$skill_dir/$target_file" ]] || continue
+      local skill_name
+      skill_name=$(basename "$skill_dir")
+      local is_from_source=false
+      while IFS=: read -r source_dir sname; do
+        [[ "$sname" == "$skill_name" ]] && is_from_source=true && break
+      done < <(discover_skills "$target_file")
+      if ! $is_from_source; then
+        echo "   ●  $skill_name  ${DIM}(original)${RESET}"
+      fi
+    done
+  fi
+
+  if ! $has_skills; then
+    warn "No skills found in any source. Run: manage-skills sources add <dir>"
+  fi
+
+  echo ""
+  echo "${DIM}Legend: [*] hardlinked  [~] local copy  [ ] available  ● original${RESET}"
+}
+
+cmd_link() {
+  local target_name="claude"
+  local skills=()
+
+  # Parse args
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --target|-t) target_name="$2"; shift 2 ;;
+      *) skills+=("$1"); shift ;;
+    esac
+  done
+
+  [[ ${#skills[@]} -eq 0 ]] && die "Usage: manage-skills link <skill> [skill...] [--target name]"
+
+  local target_info
+  target_info=$(get_target "$target_name")
+  local target_path="${target_info%%:*}"
+  local target_file="${target_info##*:}"
+  local project_skills_dir="$PWD/$target_path"
+
+  for skill_name in "${skills[@]}"; do
+    local found=false
+    while IFS=: read -r source_dir sname; do
+      [[ "$sname" == "$skill_name" ]] || continue
+      found=true
+      local source_file="$source_dir/$skill_name/$target_file"
+      local dest_dir="$project_skills_dir/$skill_name"
+      local dest_file="$dest_dir/$target_file"
+
+      if is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
+        info "$skill_name: already linked"
+        break
+      fi
+
+      mkdir -p "$dest_dir"
+      rm -f "$dest_file"
+      ln "$source_file" "$dest_file"
+      echo "  ${GREEN}linked${RESET} $skill_name ← $source_dir"
+      break
+    done < <(discover_skills "$target_file")
+
+    if ! $found; then
+      warn "$skill_name: not found in any source"
+    fi
+  done
+}
+
+cmd_unlink() {
+  local target_name="claude"
+  local skills=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --target|-t) target_name="$2"; shift 2 ;;
+      *) skills+=("$1"); shift ;;
+    esac
+  done
+
+  [[ ${#skills[@]} -eq 0 ]] && die "Usage: manage-skills unlink <skill> [skill...] [--target name]"
+
+  local target_info
+  target_info=$(get_target "$target_name")
+  local target_path="${target_info%%:*}"
+  local target_file="${target_info##*:}"
+  local project_skills_dir="$PWD/$target_path"
+
+  for skill_name in "${skills[@]}"; do
+    local dest_dir="$project_skills_dir/$skill_name"
+    if [[ -d "$dest_dir" ]]; then
+      rm -rf "$dest_dir"
+      echo "  ${RED}unlinked${RESET} $skill_name"
+    else
+      warn "$skill_name: not found in project"
+    fi
+  done
+}
+
+cmd_sync() {
+  local target_name="${1:-claude}"
+  local target_info
+  target_info=$(get_target "$target_name")
+  local target_path="${target_info%%:*}"
+  local target_file="${target_info##*:}"
+  local project_skills_dir="$PWD/$target_path"
+  local fixed=0 ok=0 missing=0
+
+  echo "${BOLD}Syncing hardlinks${RESET} ${DIM}(target: $target_name)${RESET}"
+
+  while IFS=: read -r source_dir skill_name; do
+    local source_file="$source_dir/$skill_name/$target_file"
+    local dest_dir="$project_skills_dir/$skill_name"
+    local dest_file="$dest_dir/$target_file"
+
+    [[ -d "$dest_dir" ]] || continue  # only sync skills already in the project
+
+    if is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
+      ok=$((ok + 1))
+    else
+      # File exists but is a copy, not a hardlink — re-link
+      mkdir -p "$dest_dir"
+      rm -f "$dest_file"
+      ln "$source_file" "$dest_file"
+      echo "  ${GREEN}relinked${RESET} $skill_name"
+      fixed=$((fixed + 1))
+    fi
+  done < <(discover_skills "$target_file")
+
+  echo ""
+  echo "  ${GREEN}$ok${RESET} ok, ${YELLOW}$fixed${RESET} relinked"
+}
+
+cmd_check() {
+  local target_name="${1:-claude}"
+  local target_info
+  target_info=$(get_target "$target_name")
+  local target_path="${target_info%%:*}"
+  local target_file="${target_info##*:}"
+  local project_skills_dir="$PWD/$target_path"
+  local ok=0 copies=0 originals=0
+
+  echo "${BOLD}Checking hardlinks${RESET} ${DIM}(target: $target_name)${RESET}"
+
+  [[ -d "$project_skills_dir" ]] || die "No skills directory: $project_skills_dir"
+
+  # Build source map first (skill_name → source_dir)
+  local -A source_map=()
+  while IFS=: read -r source_dir skill_name; do
+    source_map[$skill_name]="$source_dir"
+  done < <(discover_skills "$target_file")
+
+  for skill_dir in "$project_skills_dir"/*/; do
+    [[ -f "$skill_dir/$target_file" ]] || continue
+    local skill_name
+    skill_name=$(basename "$skill_dir")
+
+    if [[ -n "${source_map[$skill_name]:-}" ]]; then
+      local source_file="${source_map[$skill_name]}/$skill_name/$target_file"
+      if is_hardlinked "$skill_dir/$target_file" "$source_file"; then
+        ok=$((ok + 1))
+      else
+        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(copy, expected hardlink from ${source_map[$skill_name]})${RESET}"
+        copies=$((copies + 1))
+      fi
+    else
+      originals=$((originals + 1))
+    fi
+  done
+
+  echo ""
+  echo "  ${GREEN}$ok${RESET} linked, ${YELLOW}$copies${RESET} copies, $originals originals"
+  if [[ $copies -gt 0 ]]; then
+    echo "  Run ${BOLD}manage-skills sync${RESET} to fix copies"
+  fi
+}
+
+# ── Interactive Mode (fzf or fallback) ───────────────────────────────
+
+cmd_interactive() {
+  local target_name="${1:-claude}"
+  local target_info
+  target_info=$(get_target "$target_name")
+  local target_path="${target_info%%:*}"
+  local target_file="${target_info##*:}"
+  local project_skills_dir="$PWD/$target_path"
+
+  # Build skill list
+  local -a all_skills=()
+  local -a all_sources=()
+  local -a all_states=()
+
+  while IFS=: read -r source_dir skill_name; do
+    local source_file="$source_dir/$skill_name/$target_file"
+    local dest_file="$project_skills_dir/$skill_name/$target_file"
+    local state="available"
+
+    if [[ -f "$dest_file" ]]; then
+      if is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
+        state="linked"
+      else
+        state="copy"
+      fi
+    fi
+
+    all_skills+=("$skill_name")
+    all_sources+=("$source_dir")
+    all_states+=("$state")
+  done < <(discover_skills "$target_file")
+
+  if [[ ${#all_skills[@]} -eq 0 ]]; then
+    die "No skills found. Configure sources first: manage-skills sources add <dir>"
+  fi
+
+  # Try fzf
+  if command -v fzf &>/dev/null; then
+    _interactive_fzf "$target_name" "$target_path" "$target_file" "$project_skills_dir"
+  else
+    _interactive_basic "$target_name" "$target_path" "$target_file" "$project_skills_dir"
+  fi
+}
+
+_interactive_fzf() {
+  local target_name="$1" target_path="$2" target_file="$3" project_skills_dir="$4"
+
+  # Build fzf input
+  local fzf_input=""
+  local -a preselected=()
+  local idx=0
+
+  while IFS=: read -r source_dir skill_name; do
+    local source_file="$source_dir/$skill_name/$target_file"
+    local dest_file="$project_skills_dir/$skill_name/$target_file"
+    local marker=""
+
+    if [[ -f "$dest_file" ]] && is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
+      preselected+=("$skill_name")
+    fi
+
+    local short_source="$(shorten "$source_dir")"
+    fzf_input+="$skill_name  ← $short_source"$'\n'
+    ((idx++))
+  done < <(discover_skills "$target_file")
+
+  # Build preselect args for fzf -- we pass the already-linked ones
+  local selected
+  selected=$(echo -n "$fzf_input" | fzf --multi --ansi \
+    --header="Toggle skills with TAB, confirm with ENTER" \
+    --prompt="Skills for $(basename "$PWD") > " \
+    --preview="head -20 {+1}/$target_file 2>/dev/null || echo 'Not yet linked'" \
+    --preview-window=right:50%:wrap \
+    $(for s in "${preselected[@]}"; do echo -n " --bind=start:select-all"; break; done) \
+    | awk '{print $1}') || return 0
+
+  # Determine what to link and unlink
+  local -a to_link=()
+  local -a to_unlink=()
+
+  while IFS=: read -r source_dir skill_name; do
+    local dest_file="$project_skills_dir/$skill_name/$target_file"
+    local source_file="$source_dir/$skill_name/$target_file"
+    local is_selected=false
+    while IFS= read -r sel; do
+      [[ "$sel" == "$skill_name" ]] && is_selected=true && break
+    done <<< "$selected"
+
+    local is_linked=false
+    if [[ -f "$dest_file" ]] && is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
+      is_linked=true
+    fi
+
+    if $is_selected && ! $is_linked; then
+      to_link+=("$skill_name")
+    elif ! $is_selected && $is_linked; then
+      to_unlink+=("$skill_name")
+    fi
+  done < <(discover_skills "$target_file")
+
+  # Apply
+  for s in "${to_link[@]}"; do
+    cmd_link "$s" --target "$target_name"
+  done
+  for s in "${to_unlink[@]}"; do
+    cmd_unlink "$s" --target "$target_name"
+  done
+}
+
+_interactive_basic() {
+  local target_name="$1" target_path="$2" target_file="$3" project_skills_dir="$4"
+
+  local -a names=() sources=() states=()
+
+  while IFS=: read -r source_dir skill_name; do
+    local source_file="$source_dir/$skill_name/$target_file"
+    local dest_file="$project_skills_dir/$skill_name/$target_file"
+    local state="[ ]"
+
+    if [[ -f "$dest_file" ]]; then
+      if is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
+        state="[*]"
+      else
+        state="[~]"
+      fi
+    fi
+
+    names+=("$skill_name")
+    sources+=("$source_dir")
+    states+=("$state")
+  done < <(discover_skills "$target_file")
+
+  local -a original_states=("${states[@]}")
+
+  while true; do
+    clear 2>/dev/null || true
+    echo "${BOLD}Skills for $(basename "$PWD")${RESET}"
+    echo ""
+
+    for i in "${!names[@]}"; do
+      local num=$((i + 1))
+      local short_source="$(shorten "${sources[$i]}")"
+      if [[ "${states[$i]}" == "[*]" ]]; then
+        printf "  ${GREEN}%2d) %s${RESET} %-30s ${DIM}← %s${RESET}\n" "$num" "${states[$i]}" "${names[$i]}" "$short_source"
+      else
+        printf "  %2d) %s %-30s ${DIM}← %s${RESET}\n" "$num" "${states[$i]}" "${names[$i]}" "$short_source"
+      fi
+    done
+
+    echo ""
+    echo "${DIM}Enter number to toggle, 'a' to apply changes, 'q' to quit${RESET}"
+    read -rp "> " input
+
+    case "$input" in
+      q|Q) return ;;
+      a|A)
+        for i in "${!names[@]}"; do
+          if [[ "${states[$i]}" != "${original_states[$i]}" ]]; then
+            if [[ "${states[$i]}" == "[*]" ]]; then
+              cmd_link "${names[$i]}" --target "$target_name"
+            else
+              cmd_unlink "${names[$i]}" --target "$target_name"
+            fi
+          fi
+        done
+        return
+        ;;
+      *)
+        if [[ "$input" =~ ^[0-9]+$ ]] && (( input >= 1 && input <= ${#names[@]} )); then
+          local idx=$((input - 1))
+          if [[ "${states[$idx]}" == "[*]" ]]; then
+            states[$idx]="[ ]"
+          else
+            states[$idx]="[*]"
+          fi
+        fi
+        ;;
+    esac
+  done
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+cmd_help() {
+  echo "${BOLD}manage-skills${RESET} v$VERSION — Hardlink-based skill sharing across projects
+
+${BOLD}USAGE${RESET}
+  manage-skills                    Interactive mode (fzf or menu)
+  manage-skills list               List all available skills
+  manage-skills link <skill>...    Hardlink skills into current project
+  manage-skills unlink <skill>...  Remove skills from current project
+  manage-skills sync               Re-hardlink stale copies
+  manage-skills check              Verify hardlink integrity
+
+${BOLD}CONFIG${RESET}
+  manage-skills init               Create ~/.manage-skills/ config
+  manage-skills sources            List source directories
+  manage-skills sources add <dir>  Add a skill source directory
+  manage-skills sources remove <dir>
+  manage-skills targets            List configured targets
+  manage-skills targets add <name> <path> <file>
+
+${BOLD}OPTIONS${RESET}
+  --target, -t <name>   Target type (default: claude)
+  --version             Show version
+  --help, -h            Show this help
+
+${BOLD}CONFIG FILES${RESET}
+  ~/.manage-skills/sources   Skill source directories (one per line)
+  ~/.manage-skills/targets   Target definitions (name:path:file)
+
+${BOLD}EXAMPLES${RESET}
+  manage-skills init
+  manage-skills sources add ~/dev/shared-skills
+  manage-skills sources add ~/dev/perl/shared-skills
+  cd ~/my-project && manage-skills          # interactive
+  manage-skills link perl-moo dbio-core     # link specific skills
+  manage-skills check                       # verify everything"
+}
+
+ensure_config
+
+case "${1:-}" in
+  "")           cmd_interactive ;;
+  init)         cmd_init ;;
+  list)         shift; cmd_list "$@" ;;
+  link)         shift; cmd_link "$@" ;;
+  unlink)       shift; cmd_unlink "$@" ;;
+  sync)         shift; cmd_sync "$@" ;;
+  check)        shift; cmd_check "$@" ;;
+  sources)      shift; cmd_sources "$@" ;;
+  targets)      shift; cmd_targets "$@" ;;
+  --version)    echo "manage-skills $VERSION" ;;
+  --help|-h)    cmd_help ;;
+  *)            die "Unknown command: $1. Run manage-skills --help" ;;
+esac
