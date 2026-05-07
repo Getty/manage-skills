@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "${LATEST_TAG}" ]; then
+            LATEST_TAG="v0.1.0"
+            COMMIT_RANGE="HEAD"
+          else
+            COMMIT_RANGE="${LATEST_TAG}..HEAD"
+          fi
+          echo "latest_tag=${LATEST_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "commit_range=${COMMIT_RANGE}" >> "${GITHUB_OUTPUT}"
+
+          SUBJECTS=$(git log ${COMMIT_RANGE} --pretty=format:"%s")
+          BODIES=$(git log ${COMMIT_RANGE} --pretty=format:"%b")
+
+          BUMP="none"
+          if echo "${SUBJECTS}" | grep -qE '^[a-z]+(\(.+\))?!:'; then
+            BUMP="major"
+          elif echo "${BODIES}" | grep -q 'BREAKING CHANGE'; then
+            BUMP="major"
+          elif echo "${SUBJECTS}" | grep -qE '^feat(\(.+\))?:'; then
+            BUMP="minor"
+          elif echo "${SUBJECTS}" | grep -qE '^fix(\(.+\))?:'; then
+            BUMP="patch"
+          fi
+          echo "bump=${BUMP}" >> "${GITHUB_OUTPUT}"
+
+      - name: Calculate new version
+        if: steps.bump.outputs.bump != 'none'
+        id: version
+        run: |
+          VERSION="${{ steps.bump.outputs.latest_tag }}"
+          VERSION="${VERSION#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "${VERSION}"
+
+          case "${{ steps.bump.outputs.bump }}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch)  PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_tag=${NEW_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "${NEW_TAG} (${{ steps.bump.outputs.bump }} bump from ${{ steps.bump.outputs.latest_tag }})"
+
+      - name: Generate release notes
+        if: steps.version.outputs.new_tag
+        run: |
+          RANGE="${{ steps.bump.outputs.commit_range }}"
+          git log ${RANGE} --pretty=format:"- %s" > /tmp/release_notes.md
+
+      - name: Create release
+        if: steps.version.outputs.new_tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.new_tag }}" \
+            --title "${{ steps.version.outputs.new_tag }}" \
+            --notes-file /tmp/release_notes.md
