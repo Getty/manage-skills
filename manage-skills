@@ -79,15 +79,14 @@ get_target() {
 # Deduplicates by skill name — first source wins (so order in sources file matters).
 discover_skills() {
   local target_file="${1:-SKILL.md}"
-  local -A seen=()
+  local seen=""
   while IFS= read -r source_dir; do
     for skill_dir in "$source_dir"/*/; do
       [[ -f "$skill_dir/$target_file" ]] || continue
       local skill_name
       skill_name=$(basename "$skill_dir")
-      # Skip if we already found this skill in an earlier source
-      [[ -n "${seen[$skill_name]:-}" ]] && continue
-      seen[$skill_name]=1
+      case ",$seen," in *,"$skill_name",*) continue ;; esac
+      seen="$seen,$skill_name"
       echo "$source_dir:$skill_name"
     done
   done < <(read_sources)
@@ -373,23 +372,22 @@ cmd_check() {
 
   [[ -d "$project_skills_dir" ]] || die "No skills directory: $project_skills_dir"
 
-  # Build source map first (skill_name → source_dir)
-  local -A source_map=()
-  while IFS=: read -r source_dir skill_name; do
-    source_map[$skill_name]="$source_dir"
-  done < <(discover_skills "$target_file")
+  local discovered
+  discovered=$(discover_skills "$target_file")
 
   for skill_dir in "$project_skills_dir"/*/; do
     [[ -f "$skill_dir/$target_file" ]] || continue
     local skill_name
     skill_name=$(basename "$skill_dir")
 
-    if [[ -n "${source_map[$skill_name]:-}" ]]; then
-      local source_file="${source_map[$skill_name]}/$skill_name/$target_file"
+    local source_dir
+    source_dir=$(echo "$discovered" | grep ":${skill_name}$" | head -1 | cut -d: -f1)
+    if [[ -n "$source_dir" ]]; then
+      local source_file="$source_dir/$skill_name/$target_file"
       if is_hardlinked "$skill_dir/$target_file" "$source_file"; then
         ok=$((ok + 1))
       else
-        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(copy, expected hardlink from ${source_map[$skill_name]})${RESET}"
+        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(copy, expected hardlink from $source_dir)${RESET}"
         copies=$((copies + 1))
       fi
     else

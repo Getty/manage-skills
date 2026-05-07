@@ -137,15 +137,17 @@ echo "Check and sync"
 assert_exit 0 "check exits cleanly" "$MANAGE_SKILLS" check
 assert_output_matches "[0-9]+ linked" "check reports linked count" "$MANAGE_SKILLS" check
 
-# Break the hardlink by replacing with a copy
-cp "$SOURCE_DIR/test-skill/SKILL.md" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+# Break the hardlink by removing and recreating as independent file
+rm "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+echo "# Test Skill (modified copy)" > "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
 assert_output_contains "cop" "check detects broken hardlink" "$MANAGE_SKILLS" check
 assert_exit 0 "sync exits cleanly" "$MANAGE_SKILLS" sync
 assert_output_contains "relinked" "sync relinks broken copy" "$MANAGE_SKILLS" sync
 
 # After sync, check should be clean
 # Re-break and re-sync to test the actual relink
-cp "$SOURCE_DIR/test-skill/SKILL.md" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+rm "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+echo "# Test Skill (modified copy)" > "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
 "$MANAGE_SKILLS" sync >/dev/null 2>&1
 INODE_SRC2=$(stat -f %i "$SOURCE_DIR/test-skill/SKILL.md" 2>/dev/null || stat -c %i "$SOURCE_DIR/test-skill/SKILL.md" 2>/dev/null)
 INODE_DST2=$(stat -f %i "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md" 2>/dev/null || stat -c %i "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md" 2>/dev/null)
