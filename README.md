@@ -96,6 +96,7 @@ manage-skills                         # …or pick interactively
 | `manage-skills unlink <skill>…` | Remove skills from the current project |
 | `manage-skills sync` | Re-hardlink any skill that became a plain copy |
 | `manage-skills update [name…]` | Pull remote sources; `--check` only reports |
+| `manage-skills package [dir]` | Make a skill directory installable by others |
 | `manage-skills check` | Verify hardlink integrity |
 | `manage-skills sources` | List source directories |
 | `manage-skills sources add <dir\|repo> [label]` | Add a source — a directory or a git repo |
@@ -173,6 +174,45 @@ github:Getty/perl-skills
 A skill that disappears upstream is reported, never deleted — a project may still be
 linked to it. Where the repo keeps its skills (`skills/`, `.claude/skills/`, or the root)
 is detected, not configured.
+
+## Publishing Your Skills
+
+Someone says "I want your Perl skills." They shouldn't have to adopt your tooling to get
+them. `manage-skills package` turns a skill directory into something installable both
+ways, from the same files:
+
+```
+$ cd ~/dev/perl/shared-skills && manage-skills package
+Packaging ~/dev/perl/shared-skills
+  12 skills in ./skills: perl-moo perl-mcp perl-release-dist-ini …
+
+Wrote ~/dev/perl/shared-skills/.claude-plugin/plugin.json
+  Fill in the description before publishing.
+
+Add to your marketplace's .claude-plugin/marketplace.json:
+
+    {
+      "name": "perl-skills",
+      "source": { "source": "github", "repo": "Getty/perl-skills" },
+      "description": "..."
+    }
+
+Then people can take your skills either way:
+  Claude Code   /plugin install perl-skills@<marketplace>
+  Any tool      manage-skills sources add github:Getty/perl-skills
+```
+
+The two routes suit different people, which is why it sets up both:
+
+- **`/plugin install`** — one line, no new tooling. For anyone on Claude Code who just
+  wants the skills on their machine.
+- **`manage-skills sources add`** — for anyone who wants the skills *committed into
+  their projects* so teammates get them on clone, wants to pick per project, or isn't on
+  Claude Code at all.
+
+Nothing is duplicated: the plugin manifest and manage-skills both read the skill
+directories where they already are. An existing `plugin.json` is never overwritten
+without `--force`.
 
 ### Where skills live
 

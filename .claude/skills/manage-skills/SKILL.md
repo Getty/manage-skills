@@ -23,6 +23,7 @@ manage-skills link <skill>...        # Hardlink skills into current project
 manage-skills unlink <skill>...      # Remove skills from current project
 manage-skills sync                   # Re-hardlink stale copies
 manage-skills update [name...]       # Pull remote sources (--check only reports)
+manage-skills package [dir]          # Make a skill directory installable by others
 manage-skills check                  # Verify hardlink integrity
 manage-skills sources                # List source directories
 manage-skills sources add <dir|repo> [label]  # Add a source, local or remote
@@ -93,6 +94,20 @@ Stored in two places on purpose: `~/.manage-skills/cache/<name>/` is the git che
 `~/.manage-skills/sources.d/<name>/` holds the files that get hardlinked. Pulling
 straight into the linked copy would rename-and-replace and strand every hardlink — the
 drift this tool exists to prevent.
+
+## Publishing a skill set
+
+`manage-skills package <dir>` writes `.claude-plugin/plugin.json` pointing at the skill
+directories where they already are — no copying — and prints both install routes:
+
+- `/plugin install <name>@<marketplace>` — one line, no new tooling, for anyone on
+  Claude Code who just wants the skills on their machine.
+- `manage-skills sources add github:owner/repo` — for anyone who wants them committed
+  into their projects (teammates get them on clone), picked per project, or is not on
+  Claude Code.
+
+Both read the same files from the same repo. An existing manifest is never overwritten
+without `--force`.
 
 ## Config
 

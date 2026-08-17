@@ -767,6 +767,104 @@ cmd_update() {
   fi
 }
 
+# ── Package ──────────────────────────────────────────────────────────
+
+# owner/repo from a git remote, whatever protocol it uses.
+git_repo_slug() {
+  local dir="$1" url
+  url=$(git -C "$dir" remote get-url origin 2>/dev/null) || return 1
+  url="${url%.git}"
+  case "$url" in
+    *:*/*) url="${url##*:}" ;;
+  esac
+  case "$url" in
+    */*/*) url="${url#*//}"; url="${url#*/}" ;;
+  esac
+  echo "$url"
+}
+
+cmd_package() {
+  local dir="${1:-$PWD}" force=false
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=true; shift ;;
+      *) args[${#args[@]}]="$1"; shift ;;
+    esac
+  done
+  [[ ${#args[@]} -gt 0 ]] && dir="${args[0]}"
+  dir=$(expand_path "$dir")
+  [[ -d "$dir" ]] || die "Directory not found: $dir"
+  dir=$(cd -P "$dir" && pwd)
+
+  local skills_root
+  skills_root=$(remote_skills_subdir "$dir") \
+    || die "No skills found in $(shorten "$dir") — expected skill directories in ./, skills/ or .claude/skills/"
+
+  local names="" count=0 skill_dir skill_name
+  for skill_dir in "$skills_root"/*/; do
+    [[ -f "$skill_dir/SKILL.md" ]] || continue
+    skill_name=$(basename "$skill_dir")
+    names="$names $skill_name"
+    count=$((count + 1))
+  done
+  [[ $count -eq 0 ]] && die "No SKILL.md files under $(shorten "$skills_root")"
+
+  local rel="${skills_root#$dir}"
+  rel=".${rel:-/}"
+  local plugin_name
+  plugin_name=$(basename "$dir")
+  local slug
+  slug=$(git_repo_slug "$dir" || echo "OWNER/$plugin_name")
+
+  echo "${BOLD}Packaging $(shorten "$dir")${RESET}"
+  echo "  ${GREEN}$count skills${RESET} in $rel:$names"
+  echo ""
+
+  local manifest="$dir/.claude-plugin/plugin.json"
+  if [[ -f "$manifest" ]] && ! $force; then
+    warn "Manifest exists, leaving it alone: $(shorten "$manifest")"
+    echo "  ${DIM}re-run with --force to overwrite${RESET}"
+  else
+    mkdir -p "$dir/.claude-plugin"
+    cat > "$manifest" <<MANIFEST
+{
+  "name": "$plugin_name",
+  "description": "TODO: one line on what these skills cover — this is what people read when browsing.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/$slug",
+  "repository": "https://github.com/$slug",
+  "skills": "$rel"
+}
+MANIFEST
+    info "Wrote $(shorten "$manifest")"
+    echo "  ${YELLOW}Fill in the description before publishing.${RESET}"
+  fi
+
+  echo ""
+  echo "${BOLD}Add to your marketplace's .claude-plugin/marketplace.json:${RESET}"
+  cat <<ENTRY
+
+    {
+      "name": "$plugin_name",
+      "source": { "source": "github", "repo": "$slug" },
+      "description": "..."
+    }
+ENTRY
+  echo ""
+  echo "${BOLD}Then people can take your skills either way:${RESET}"
+  echo "  ${DIM}Claude Code${RESET}   /plugin install $plugin_name@<marketplace>"
+  echo "  ${DIM}Any tool${RESET}      manage-skills sources add github:$slug"
+  echo ""
+  echo "${DIM}Same repo, same files, no copy — the plugin manifest and this tool"
+  echo "both read the skill directories where they already are.${RESET}"
+
+  if command -v claude >/dev/null 2>&1; then
+    echo ""
+    claude plugin validate "$dir" 2>&1 | tail -3 || true
+  fi
+}
+
 # ── Self ─────────────────────────────────────────────────────────────
 
 # Absolute directory of the running script, following symlinks. install.sh
@@ -1281,6 +1379,10 @@ ${BOLD}USAGE${RESET}
   manage-skills update [name...]   Pull remote sources (--check only reports)
   manage-skills check              Verify hardlink integrity
 
+${BOLD}PUBLISHING${RESET}
+  manage-skills package [dir]      Make a skill directory installable by others
+                                   (writes .claude-plugin/plugin.json)
+
 ${BOLD}SELF${RESET}
   manage-skills self               Where this install and its own skills live
   manage-skills self install       Register the shipped skills as a source
@@ -1325,6 +1427,7 @@ case "${1:-}" in
   list)         shift; cmd_list "$@" ;;
   locations)    shift; cmd_locations "$@" ;;
   update)       shift; cmd_update "$@" ;;
+  package)      shift; cmd_package "$@" ;;
   self)         shift; cmd_self "$@" ;;
   selfupdate)   shift; cmd_self update "$@" ;;
   link)         shift; cmd_link "$@" ;;
