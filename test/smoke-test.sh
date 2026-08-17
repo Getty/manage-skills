@@ -5,7 +5,8 @@ set -euo pipefail
 # Compatible with bash 3.2+ (no associative arrays, no mapfile)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANAGE_SKILLS="$SCRIPT_DIR/../manage-skills"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+MANAGE_SKILLS="$REPO_DIR/manage-skills"
 
 PASS=0
 FAIL=0
@@ -176,7 +177,58 @@ assert_exit 0 "check survives a project-owned skill" "$MANAGE_SKILLS" check
 assert_output_matches "1 originals?" "check counts the original" "$MANAGE_SKILLS" check
 assert_output_contains "project-original" "list shows the original" "$MANAGE_SKILLS" list
 assert_exit 0 "sync survives a project-owned skill" "$MANAGE_SKILLS" sync
+
+echo ""
+echo "Piped list output"
+# Not a terminal, so `list` stays one skill per line and remains grep-able.
+# (On a terminal the same skills are laid out in columns, several per line.)
+LIST_OUT=$("$MANAGE_SKILLS" list)
+MERGED=$(echo "$LIST_OUT" | grep "test-skill" | grep -c "project-original" || true)
+if [ "$MERGED" -eq 0 ] && echo "$LIST_OUT" | grep -q "project-original"; then
+  pass "piped list keeps one skill per line"
+else
+  fail "piped list keeps one skill per line" "skills share a line"
+fi
+
 rm -rf "$PROJECT_DIR/.claude/skills/project-original"
+
+echo ""
+echo "Locations"
+assert_exit 0 "locations exits cleanly" "$MANAGE_SKILLS" locations
+assert_output_contains "test-skill" "locations lists the source's skills" "$MANAGE_SKILLS" locations
+assert_output_contains "$SOURCE_DIR" "locations names the source dir" "$MANAGE_SKILLS" locations
+
+# A trailing "# label" describes the source; older label-free lines keep working.
+LABELLED_DIR="$TMPDIR_BASE/sources/labelled"
+mkdir -p "$LABELLED_DIR/labelled-skill"
+echo "# Labelled" > "$LABELLED_DIR/labelled-skill/SKILL.md"
+"$MANAGE_SKILLS" sources add "$LABELLED_DIR" Extra skills for tests >/dev/null 2>&1
+assert_output_contains "Extra skills for tests" "sources list shows the label" "$MANAGE_SKILLS" sources list
+assert_output_contains "Extra skills for tests" "locations shows the label" "$MANAGE_SKILLS" locations
+assert_output_contains "labelled-skill" "labelled source still resolves" "$MANAGE_SKILLS" list
+assert_exit 0 "link from a labelled source" "$MANAGE_SKILLS" link labelled-skill
+LI_SRC=$(inode "$LABELLED_DIR/labelled-skill/SKILL.md")
+LI_DST=$(inode "$PROJECT_DIR/.claude/skills/labelled-skill/SKILL.md")
+if [ "$LI_SRC" = "$LI_DST" ]; then
+  pass "labelled source hardlinks correctly"
+else
+  fail "labelled source hardlinks correctly" "src=$LI_SRC dst=$LI_DST"
+fi
+"$MANAGE_SKILLS" unlink labelled-skill >/dev/null 2>&1
+
+# A second source providing the same name is shadowed by the first.
+SHADOW_DIR="$TMPDIR_BASE/sources/shadow"
+mkdir -p "$SHADOW_DIR/test-skill"
+echo "# Shadowed" > "$SHADOW_DIR/test-skill/SKILL.md"
+"$MANAGE_SKILLS" sources add "$SHADOW_DIR" Lower priority >/dev/null 2>&1
+assert_output_contains "shadowed" "locations flags a shadowed skill" "$MANAGE_SKILLS" locations
+"$MANAGE_SKILLS" sources remove "$SHADOW_DIR" >/dev/null 2>&1
+"$MANAGE_SKILLS" sources remove "$LABELLED_DIR" >/dev/null 2>&1
+
+# notes.md is appended verbatim when it exists.
+echo "CONVENTION: kubernetes spelled out" > "$MANAGE_SKILLS_HOME/notes.md"
+assert_output_contains "CONVENTION: kubernetes spelled out" "locations appends notes.md" "$MANAGE_SKILLS" locations
+rm -f "$MANAGE_SKILLS_HOME/notes.md"
 
 echo ""
 echo "Config repair"
@@ -188,9 +240,28 @@ assert_exit 0 "init repairs a config dir with no files" env MANAGE_SKILLS_HOME="
 test -f "$BARE_HOME/targets" && pass "targets file recreated" || fail "targets file recreated"
 
 echo ""
+echo "Target flag"
+assert_exit 0 "list accepts --target" "$MANAGE_SKILLS" list --target claude
+assert_exit 0 "list accepts a positional target" "$MANAGE_SKILLS" list claude
+assert_exit 0 "locations accepts --target" "$MANAGE_SKILLS" locations --target claude
+assert_exit 0 "check accepts --target" "$MANAGE_SKILLS" check --target claude
+assert_exit 1 "unknown target fails" "$MANAGE_SKILLS" list --target bogus
+
+echo ""
+echo "Self"
+assert_exit 0 "self status exits cleanly" "$MANAGE_SKILLS" self
+assert_output_contains "manage-skills" "self status names the script" "$MANAGE_SKILLS" self
+assert_exit 0 "self install registers the shipped skills" "$MANAGE_SKILLS" self install
+assert_output_contains "registered as a source" "self status confirms registration" "$MANAGE_SKILLS" self
+assert_exit 1 "unknown self subcommand fails" "$MANAGE_SKILLS" self bogus
+"$MANAGE_SKILLS" sources remove "$REPO_DIR/.claude/skills" >/dev/null 2>&1
+
+echo ""
 echo "Error handling"
 assert_exit 1 "unknown command fails" "$MANAGE_SKILLS" bogus-command
 assert_exit 1 "link without args fails" "$MANAGE_SKILLS" link
+# Regression: `shift 2` past the end shifted nothing, so arg parsing spun forever.
+assert_exit 1 "dangling --target fails instead of hanging" "$MANAGE_SKILLS" list --target
 assert_exit 1 "dangling --target on link fails" "$MANAGE_SKILLS" link some-skill --target
 
 # ── Summary ─────────────────────────────────────────────────────────
