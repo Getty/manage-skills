@@ -197,22 +197,23 @@ Add to your marketplace's .claude-plugin/marketplace.json:
       "description": "..."
     }
 
-Then people can take your skills either way:
+Then people can take your skills three ways:
   Claude Code   /plugin install perl-skills@<marketplace>
+  Codex         codex plugin add perl-skills@<marketplace>
   Any tool      manage-skills sources add github:Getty/perl-skills
 ```
 
-The two routes suit different people, which is why it sets up both:
+The three routes suit different people, which is why it sets up all of them:
 
-- **`/plugin install`** — one line, no new tooling. For anyone on Claude Code who just
-  wants the skills on their machine.
+- **`/plugin install`** and **`codex plugin add`** — one line, no new tooling, for
+  anyone who just wants your skills on their machine.
 - **`manage-skills sources add`** — for anyone who wants the skills *committed into
-  their projects* so teammates get them on clone, wants to pick per project, or isn't on
-  Claude Code at all.
+  their projects* so teammates get them on clone, wants to pick per project, or uses
+  neither of those two CLIs.
 
-Nothing is duplicated: the plugin manifest and manage-skills both read the skill
-directories where they already are. An existing `plugin.json` is never overwritten
-without `--force`.
+Nothing is duplicated. Claude Code and Codex both read `<name>/SKILL.md`, so one skills
+directory serves both — only the two manifests differ, and both point at the directories
+where they already are. An existing manifest is never overwritten without `--force`.
 
 ### Where skills live
 
@@ -249,16 +250,31 @@ keeps working.
 
 ### Targets
 
-By default manage-skills targets Claude Code (`.claude/skills/SKILL.md`). The target
-system is extensible:
+Two targets are configured out of the box, because the two big agent CLIs look in
+different places:
 
 ```bash
 manage-skills targets list
 # claude  →  .claude/skills/SKILL.md
+# codex   →  .agents/skills/SKILL.md
 
+manage-skills link perl-moo                  # into .claude/skills/
+manage-skills link perl-moo --target codex   # into .agents/skills/
+```
+
+Codex discovers skills in `.agents/skills/` — at the repo root, in the current directory,
+and in `$HOME/.agents/skills`. Same hardlink mechanics, different directory, so a skill
+can serve both from one source of truth.
+
+Adding another tool is one line:
+
+```bash
 manage-skills targets add cursor .cursor/rules RULE.md
 manage-skills list --target cursor
 ```
+
+*(Upgrading from an older install? The `codex` target only lands in fresh configs — add
+it with `manage-skills targets add codex .agents/skills SKILL.md`.)*
 
 ## Naming Skills
 

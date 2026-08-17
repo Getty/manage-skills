@@ -40,10 +40,13 @@ ensure_config() {
     mkdir -p "$CONFIG_DIR"
     info "Created $CONFIG_DIR"
   fi
-  # Write default target
+  # Write default targets
   if [[ ! -f "$TARGETS_FILE" ]]; then
-    echo "claude:.claude/skills:SKILL.md" > "$TARGETS_FILE"
-    info "Default target: claude (.claude/skills/SKILL.md)"
+    cat > "$TARGETS_FILE" <<'TARGETS'
+claude:.claude/skills:SKILL.md
+codex:.agents/skills:SKILL.md
+TARGETS
+    info "Default targets: claude (.claude/skills), codex (.agents/skills)"
   fi
   [[ -f "$SOURCES_FILE" ]] && return
   # Empty sources file with comment
@@ -783,6 +786,30 @@ git_repo_slug() {
   echo "$url"
 }
 
+# Writes one plugin manifest. Returns 0 when it wrote, 1 when it left an
+# existing file alone — an existing manifest is somebody's work.
+write_plugin_manifest() {
+  local path="$1" name="$2" slug="$3" rel="$4" force="$5"
+  if [[ -f "$path" ]] && ! $force; then
+    warn "Manifest exists, leaving it alone: $(shorten "$path")"
+    echo "  ${DIM}re-run with --force to overwrite${RESET}"
+    return 1
+  fi
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<MANIFEST
+{
+  "name": "$name",
+  "description": "TODO: one line on what these skills cover — this is what people read when browsing.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/$slug",
+  "repository": "https://github.com/$slug",
+  "skills": "$rel"
+}
+MANIFEST
+  info "Wrote $(shorten "$path")"
+  return 0
+}
+
 cmd_package() {
   local dir="${1:-$PWD}" force=false
   local args=()
@@ -821,28 +848,17 @@ cmd_package() {
   echo "  ${GREEN}$count skills${RESET} in $rel:$names"
   echo ""
 
-  local manifest="$dir/.claude-plugin/plugin.json"
-  if [[ -f "$manifest" ]] && ! $force; then
-    warn "Manifest exists, leaving it alone: $(shorten "$manifest")"
-    echo "  ${DIM}re-run with --force to overwrite${RESET}"
-  else
-    mkdir -p "$dir/.claude-plugin"
-    cat > "$manifest" <<MANIFEST
-{
-  "name": "$plugin_name",
-  "description": "TODO: one line on what these skills cover — this is what people read when browsing.",
-  "version": "0.1.0",
-  "homepage": "https://github.com/$slug",
-  "repository": "https://github.com/$slug",
-  "skills": "$rel"
-}
-MANIFEST
-    info "Wrote $(shorten "$manifest")"
-    echo "  ${YELLOW}Fill in the description before publishing.${RESET}"
-  fi
+  # Claude Code and Codex both lay skills out as <name>/SKILL.md, so one
+  # directory serves both. Only the manifests differ.
+  local wrote=0
+  write_plugin_manifest "$dir/.claude-plugin/plugin.json" "$plugin_name" "$slug" "$rel" "$force" \
+    && wrote=$((wrote + 1))
+  write_plugin_manifest "$dir/.codex-plugin/plugin.json" "$plugin_name" "$slug" "$rel" "$force" \
+    && wrote=$((wrote + 1))
+  [[ $wrote -gt 0 ]] && echo "  ${YELLOW}Fill in the description before publishing.${RESET}"
 
   echo ""
-  echo "${BOLD}Add to your marketplace's .claude-plugin/marketplace.json:${RESET}"
+  echo "${BOLD}Claude Code${RESET} ${DIM}— add to your marketplace's .claude-plugin/marketplace.json${RESET}"
   cat <<ENTRY
 
     {
@@ -852,12 +868,24 @@ MANIFEST
     }
 ENTRY
   echo ""
-  echo "${BOLD}Then people can take your skills either way:${RESET}"
+  echo "${BOLD}Codex${RESET} ${DIM}— add to your marketplace's .agents/plugins/marketplace.json${RESET}"
+  cat <<ENTRY
+
+    {
+      "name": "$plugin_name",
+      "source": { "source": "url", "url": "https://github.com/$slug" },
+      "policy": { "installation": "AVAILABLE", "authentication": "NONE" },
+      "category": "Productivity"
+    }
+ENTRY
+  echo ""
+  echo "${BOLD}Then people can take your skills three ways:${RESET}"
   echo "  ${DIM}Claude Code${RESET}   /plugin install $plugin_name@<marketplace>"
+  echo "  ${DIM}Codex${RESET}         codex plugin add $plugin_name@<marketplace>"
   echo "  ${DIM}Any tool${RESET}      manage-skills sources add github:$slug"
   echo ""
-  echo "${DIM}Same repo, same files, no copy — the plugin manifest and this tool"
-  echo "both read the skill directories where they already are.${RESET}"
+  echo "${DIM}Same repo, same files, no copy. Both plugin systems read"
+  echo "<name>/SKILL.md, so only the two manifests differ.${RESET}"
 
   if command -v claude >/dev/null 2>&1; then
     echo ""
