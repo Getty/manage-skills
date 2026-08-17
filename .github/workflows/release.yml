@@ -63,6 +63,26 @@ jobs:
           echo "new_tag=${NEW_TAG}" >> "${GITHUB_OUTPUT}"
           echo "${NEW_TAG} (${{ steps.bump.outputs.bump }} bump from ${{ steps.bump.outputs.latest_tag }})"
 
+      - name: Sync VERSION in script
+        if: steps.version.outputs.new_tag
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.new_tag }}"
+          NEW_VERSION="${NEW_VERSION#v}"
+          sed -i.bak "s/^VERSION=\".*\"$/VERSION=\"${NEW_VERSION}\"/" manage-skills
+          rm -f manage-skills.bak
+          grep -q "^VERSION=\"${NEW_VERSION}\"$" manage-skills
+
+          if git diff --quiet; then
+            echo "VERSION already in sync, nothing to commit"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): ${{ steps.version.outputs.new_tag }}"
+          # Pushes made with GITHUB_TOKEN do not re-trigger workflows, so this
+          # cannot loop back into another release run.
+          git push origin HEAD:main
+
       - name: Generate release notes
         if: steps.version.outputs.new_tag
         run: |

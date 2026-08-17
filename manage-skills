@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 CONFIG_DIR="${MANAGE_SKILLS_HOME:-$HOME/.manage-skills}"
 SOURCES_FILE="$CONFIG_DIR/sources"
 TARGETS_FILE="$CONFIG_DIR/targets"
@@ -22,12 +22,17 @@ shorten() { echo "${1//$HOME/\~}"; }
 # ── Config ──────────────────────────────────────────────────────────
 
 ensure_config() {
-  [[ -d "$CONFIG_DIR" ]] && return
-  mkdir -p "$CONFIG_DIR"
-  info "Created $CONFIG_DIR"
+  [[ -d "$CONFIG_DIR" && -f "$TARGETS_FILE" && -f "$SOURCES_FILE" ]] && return
+  if [[ ! -d "$CONFIG_DIR" ]]; then
+    mkdir -p "$CONFIG_DIR"
+    info "Created $CONFIG_DIR"
+  fi
   # Write default target
-  echo "claude:.claude/skills:SKILL.md" > "$TARGETS_FILE"
-  info "Default target: claude (.claude/skills/SKILL.md)"
+  if [[ ! -f "$TARGETS_FILE" ]]; then
+    echo "claude:.claude/skills:SKILL.md" > "$TARGETS_FILE"
+    info "Default target: claude (.claude/skills/SKILL.md)"
+  fi
+  [[ -f "$SOURCES_FILE" ]] && return
   # Empty sources file with comment
   cat > "$SOURCES_FILE" << 'SOURCES'
 # manage-skills source directories
@@ -255,7 +260,9 @@ cmd_link() {
   # Parse args
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --target|-t) target_name="$2"; shift 2 ;;
+      --target|-t)
+        [[ -n "${2:-}" ]] || die "Missing value for $1"
+        target_name="$2"; shift 2 ;;
       *) skills+=("$1"); shift ;;
     esac
   done
@@ -301,7 +308,9 @@ cmd_unlink() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --target|-t) target_name="$2"; shift 2 ;;
+      --target|-t)
+        [[ -n "${2:-}" ]] || die "Missing value for $1"
+        target_name="$2"; shift 2 ;;
       *) skills+=("$1"); shift ;;
     esac
   done
@@ -380,8 +389,16 @@ cmd_check() {
     local skill_name
     skill_name=$(basename "$skill_dir")
 
-    local source_dir
-    source_dir=$(echo "$discovered" | grep ":${skill_name}$" | head -1 | cut -d: -f1)
+    # No `grep | cut` here: under `set -o pipefail` a project-owned skill
+    # (no matching source) makes grep exit 1 and kills the whole run.
+    local source_dir=""
+    local entry
+    while IFS= read -r entry; do
+      case "$entry" in
+        *":$skill_name") source_dir="${entry%:*}"; break ;;
+      esac
+    done <<< "$discovered"
+
     if [[ -n "$source_dir" ]]; then
       local source_file="$source_dir/$skill_name/$target_file"
       if is_hardlinked "$skill_dir/$target_file" "$source_file"; then
