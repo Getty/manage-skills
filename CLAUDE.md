@@ -80,7 +80,7 @@ it and every reader goes through `read_source_lines`. A source path containing a
 
 ## Packaging
 
-The repo is three things at once, from one set of files:
+The repo is two things at once, from one set of files:
 
 - **CLI** — `manage-skills`, installed by `install.sh` or Homebrew.
 - **Claude Code plugin** — `.claude-plugin/plugin.json` points `skills` at
@@ -89,14 +89,20 @@ The repo is three things at once, from one set of files:
   to the script; the plugin's `bin/` goes on the Bash tool's `PATH`, so installing the
   plugin is enough to get the command. A relative symlink survives a clone — the absolute
   kind is exactly what this tool exists to avoid.
-- **Marketplace** — `.claude-plugin/marketplace.json` lists this repo as its own plugin
-  (`"source": "./"`).
 
-Validate both manifests with `claude plugin validate . --strict`.
+Distribution goes through the shared catalog at
+[Getty/claude-code](https://github.com/Getty/claude-code), which lists this repo as a
+github source. This repo carries no `marketplace.json` of its own — one catalog for every
+plugin, so users register a single marketplace.
+
+Validate the manifest with `claude plugin validate .`. It warns that a root `CLAUDE.md`
+is not loaded as project context — expected here, because this file is guidance for
+working *on* manage-skills, not content the plugin ships. That warning is why `--strict`
+fails; use the plain form.
 
 Two hand-maintained lists have to track reality, and the smoke tests fail if they drift:
 `SELF_SKILLS` in the script must match the directories in `.claude/skills/`, and the
-version must be identical in the script, `plugin.json`, and `marketplace.json`.
+version must be identical in the script and `plugin.json`.
 
 `cmd_self` resolves its own location by walking `BASH_SOURCE` through symlinks — `$0`'s
 directory is the bin dir, not the checkout, whenever `install.sh` ran in dev mode. How it
@@ -112,5 +118,5 @@ usual break; a change that passes on only one platform is not done.
 
 Commits are conventional (`feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:`) and always
 `--signoff`. Merging to `main` cuts a SemVer release from those prefixes, and the release
-job rewrites the version in the script and both manifests to match the new tag — leave
-those three lines to the workflow.
+job rewrites the version in the script and in `plugin.json` to match the new tag — leave
+those two lines to the workflow.

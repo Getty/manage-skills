@@ -20,10 +20,8 @@ jobs:
       - name: Check script syntax
         run: bash -n manage-skills
 
-      - name: Validate plugin manifests
-        run: |
-          python3 -c "import json,sys; [json.load(open(f)) for f in sys.argv[1:]]" \
-            .claude-plugin/plugin.json .claude-plugin/marketplace.json
+      - name: Validate plugin manifest
+        run: python3 -c "import json; json.load(open('.claude-plugin/plugin.json'))"
 
       - name: Run smoke tests
         run: bash test/smoke-test.sh

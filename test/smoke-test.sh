@@ -258,15 +258,15 @@ assert_exit 1 "unknown self subcommand fails" "$MANAGE_SKILLS" self bogus
 
 echo ""
 echo "Packaging consistency"
-# The version lives in three files; the release workflow bumps all three.
+# The version lives in the script and the plugin manifest; the release
+# workflow bumps both.
 SCRIPT_VERSION=$(grep -m1 '^VERSION=' "$MANAGE_SKILLS" | cut -d'"' -f2)
 PLUGIN_VERSION=$(grep -m1 '"version"' "$REPO_DIR/.claude-plugin/plugin.json" | cut -d'"' -f4)
-MARKET_VERSION=$(grep -m1 '"version"' "$REPO_DIR/.claude-plugin/marketplace.json" | cut -d'"' -f4)
-if [ "$SCRIPT_VERSION" = "$PLUGIN_VERSION" ] && [ "$SCRIPT_VERSION" = "$MARKET_VERSION" ]; then
-  pass "version matches across script, plugin and marketplace"
+if [ "$SCRIPT_VERSION" = "$PLUGIN_VERSION" ]; then
+  pass "version matches between script and plugin manifest"
 else
-  fail "version matches across script, plugin and marketplace" \
-       "script=$SCRIPT_VERSION plugin=$PLUGIN_VERSION marketplace=$MARKET_VERSION"
+  fail "version matches between script and plugin manifest" \
+       "script=$SCRIPT_VERSION plugin=$PLUGIN_VERSION"
 fi
 
 # SELF_SKILLS is hand-maintained; it must match what .claude/skills actually holds.

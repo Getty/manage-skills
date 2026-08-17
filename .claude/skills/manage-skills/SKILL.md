@@ -69,8 +69,8 @@ Installing the Claude Code plugin does the same thing a different way — it put
 on `PATH` and loads both skills:
 
 ```
-/plugin marketplace add Getty/manage-skills
-/plugin install manage-skills@getty-manage-skills
+/plugin marketplace add Getty/claude-code
+/plugin install manage-skills@getty
 ```
 
 ## Config
