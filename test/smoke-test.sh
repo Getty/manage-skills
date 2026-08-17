@@ -257,6 +257,37 @@ assert_exit 1 "unknown self subcommand fails" "$MANAGE_SKILLS" self bogus
 "$MANAGE_SKILLS" sources remove "$REPO_DIR/.claude/skills" >/dev/null 2>&1
 
 echo ""
+echo "Packaging consistency"
+# The version lives in three files; the release workflow bumps all three.
+SCRIPT_VERSION=$(grep -m1 '^VERSION=' "$MANAGE_SKILLS" | cut -d'"' -f2)
+PLUGIN_VERSION=$(grep -m1 '"version"' "$REPO_DIR/.claude-plugin/plugin.json" | cut -d'"' -f4)
+MARKET_VERSION=$(grep -m1 '"version"' "$REPO_DIR/.claude-plugin/marketplace.json" | cut -d'"' -f4)
+if [ "$SCRIPT_VERSION" = "$PLUGIN_VERSION" ] && [ "$SCRIPT_VERSION" = "$MARKET_VERSION" ]; then
+  pass "version matches across script, plugin and marketplace"
+else
+  fail "version matches across script, plugin and marketplace" \
+       "script=$SCRIPT_VERSION plugin=$PLUGIN_VERSION marketplace=$MARKET_VERSION"
+fi
+
+# SELF_SKILLS is hand-maintained; it must match what .claude/skills actually holds.
+DECLARED=$(grep -m1 '^SELF_SKILLS=' "$MANAGE_SKILLS" | cut -d'"' -f2 | tr ' ' '\n' | sort | tr '\n' ' ')
+ON_DISK=$(for d in "$REPO_DIR"/.claude/skills/*/; do
+            [ -f "$d/SKILL.md" ] && basename "$d"
+          done | sort | tr '\n' ' ')
+if [ "$DECLARED" = "$ON_DISK" ]; then
+  pass "SELF_SKILLS matches .claude/skills"
+else
+  fail "SELF_SKILLS matches .claude/skills" "declared='$DECLARED' on disk='$ON_DISK'"
+fi
+
+# bin/manage-skills goes on the Bash tool's PATH when the plugin is enabled.
+if [ -L "$REPO_DIR/bin/manage-skills" ] && [ -x "$REPO_DIR/bin/manage-skills" ]; then
+  pass "bin/manage-skills is a working relative symlink"
+else
+  fail "bin/manage-skills is a working relative symlink"
+fi
+
+echo ""
 echo "Error handling"
 assert_exit 1 "unknown command fails" "$MANAGE_SKILLS" bogus-command
 assert_exit 1 "link without args fails" "$MANAGE_SKILLS" link
