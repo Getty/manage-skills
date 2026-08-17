@@ -20,7 +20,9 @@ fi
 die() { echo "${RED}error:${RESET} $*" >&2; exit 1; }
 info() { echo "${CYAN}$*${RESET}"; }
 warn() { echo "${YELLOW}$*${RESET}"; }
-shorten() { echo "${1//$HOME/\~}"; }
+# The tilde comes from a variable: bash 3.2 keeps the backslash in
+# "${1//$HOME/\~}" and emits \~/... , which never expands back.
+shorten() { local tilde='~'; echo "${1//$HOME/$tilde}"; }
 
 # ── Config ──────────────────────────────────────────────────────────
 
@@ -621,7 +623,9 @@ cmd_self() {
         info "Already a source: $(shorten "$skills_dir")"
       else
         # Appended, so it stays lowest priority — your own skills win.
-        printf '%s   # %s\n' "$(shorten "$skills_dir")" "Shipped with manage-skills" >> "$SOURCES_FILE"
+        # Absolute, not shortened: what a config stores and what a terminal
+        # shows are different jobs.
+        printf '%s   # %s\n' "$skills_dir" "Shipped with manage-skills" >> "$SOURCES_FILE"
         info "Registered as a source: $(shorten "$skills_dir")"
       fi
       echo ""
