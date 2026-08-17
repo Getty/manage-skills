@@ -115,7 +115,10 @@ assert_exit 0 "sources remove" "$MANAGE_SKILLS" sources remove "$SOURCE_DIR"
 
 echo ""
 echo "Targets"
-assert_output_contains "claude" "targets list shows default" "$MANAGE_SKILLS" targets list
+assert_output_contains "claude" "targets list shows the claude default" "$MANAGE_SKILLS" targets list
+assert_output_contains "codex" "targets list shows the codex default" "$MANAGE_SKILLS" targets list
+assert_output_contains ".agents/skills" "codex target uses the shared discovery path" \
+  "$MANAGE_SKILLS" targets list
 
 echo ""
 echo "List"
@@ -136,6 +139,17 @@ if [ "$INODE_SRC" = "$INODE_DST" ]; then
 else
   fail "hardlink shares inode" "src=$INODE_SRC dst=$INODE_DST"
 fi
+
+# Codex reads .agents/skills; same hardlink mechanics, different directory.
+assert_exit 0 "link into the codex target" "$MANAGE_SKILLS" link test-skill --target codex
+test -f "$PROJECT_DIR/.agents/skills/test-skill/SKILL.md" \
+  && pass "codex target writes to .agents/skills" || fail "codex target writes to .agents/skills"
+if [ "$(inode "$SOURCE_DIR/test-skill/SKILL.md")" = "$(inode "$PROJECT_DIR/.agents/skills/test-skill/SKILL.md")" ]; then
+  pass "codex target shares the inode with the source"
+else
+  fail "codex target shares the inode with the source"
+fi
+assert_exit 0 "unlink from the codex target" "$MANAGE_SKILLS" unlink test-skill --target codex
 
 assert_exit 0 "unlink test-skill" "$MANAGE_SKILLS" unlink test-skill
 test ! -d "$PROJECT_DIR/.claude/skills/test-skill" && pass "skill dir removed after unlink" || fail "skill dir removed after unlink"
@@ -342,7 +356,17 @@ git -C "$PKG" init -q -b main
 git -C "$PKG" remote add origin git@github.com:Someone/publishable.git
 
 assert_exit 0 "package exits cleanly" "$MANAGE_SKILLS" package "$PKG"
-test -f "$PKG/.claude-plugin/plugin.json" && pass "package writes a manifest" || fail "package writes a manifest"
+test -f "$PKG/.claude-plugin/plugin.json" && pass "package writes the Claude Code manifest" || fail "package writes the Claude Code manifest"
+test -f "$PKG/.codex-plugin/plugin.json" && pass "package writes the Codex manifest" || fail "package writes the Codex manifest"
+# Both plugin systems read <name>/SKILL.md, so the two manifests point at one dir.
+CC_SKILLS=$(grep '"skills"' "$PKG/.claude-plugin/plugin.json")
+CX_SKILLS=$(grep '"skills"' "$PKG/.codex-plugin/plugin.json")
+if [ "$CC_SKILLS" = "$CX_SKILLS" ]; then
+  pass "both manifests point at the same skills dir"
+else
+  fail "both manifests point at the same skills dir" "claude=$CC_SKILLS codex=$CX_SKILLS"
+fi
+assert_output_contains "codex plugin add" "package shows the Codex route" "$MANAGE_SKILLS" package "$PKG"
 assert_output_contains "Someone/publishable" "package derives the repo from the git remote" \
   "$MANAGE_SKILLS" package "$PKG"
 assert_output_contains "sources add github:Someone/publishable" \
@@ -355,6 +379,7 @@ fi
 
 # An existing manifest is somebody's work — never clobber it silently.
 echo '{"name":"hand-written"}' > "$PKG/.claude-plugin/plugin.json"
+rm -f "$PKG/.codex-plugin/plugin.json"
 assert_output_contains "leaving it alone" "package keeps an existing manifest" \
   "$MANAGE_SKILLS" package "$PKG"
 if grep -q "hand-written" "$PKG/.claude-plugin/plugin.json"; then

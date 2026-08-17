@@ -100,14 +100,16 @@ drift this tool exists to prevent.
 `manage-skills package <dir>` writes `.claude-plugin/plugin.json` pointing at the skill
 directories where they already are — no copying — and prints both install routes:
 
-- `/plugin install <name>@<marketplace>` — one line, no new tooling, for anyone on
-  Claude Code who just wants the skills on their machine.
+- `/plugin install <name>@<marketplace>` (Claude Code) or
+  `codex plugin add <name>@<marketplace>` (Codex) — one line, no new tooling, for
+  anyone who just wants the skills on their machine.
 - `manage-skills sources add github:owner/repo` — for anyone who wants them committed
-  into their projects (teammates get them on clone), picked per project, or is not on
-  Claude Code.
+  into their projects (teammates get them on clone), picked per project, or uses neither
+  of those CLIs.
 
-Both read the same files from the same repo. An existing manifest is never overwritten
-without `--force`.
+Both plugin systems read `<name>/SKILL.md`, so one skills directory serves both — only
+the manifests differ (`.claude-plugin/` and `.codex-plugin/`). An existing manifest is
+never overwritten without `--force`.
 
 ## Config
 
@@ -120,11 +122,17 @@ match wins). A trailing `# label` describes the source and shows up in `location
 github:Getty/perl-skills     # Remote — fetched with `manage-skills update`
 ```
 
-`~/.manage-skills/targets` — format `name:path:file`:
+`~/.manage-skills/targets` — format `name:path:file`. Two are configured by default,
+because Claude Code and Codex look in different places:
 
 ```
 claude:.claude/skills:SKILL.md
+codex:.agents/skills:SKILL.md
 ```
+
+`manage-skills link <skill> --target codex` puts the same source of truth into
+`.agents/skills/`, which is where Codex discovers skills. Older configs predate the
+codex entry: `manage-skills targets add codex .agents/skills SKILL.md`.
 
 `~/.manage-skills/notes.md` — optional free-form Markdown, appended to `locations`.
 
