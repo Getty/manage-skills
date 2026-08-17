@@ -254,6 +254,19 @@ assert_output_contains "manage-skills" "self status names the script" "$MANAGE_S
 assert_exit 0 "self install registers the shipped skills" "$MANAGE_SKILLS" self install
 assert_output_contains "registered as a source" "self status confirms registration" "$MANAGE_SKILLS" self
 assert_exit 1 "unknown self subcommand fails" "$MANAGE_SKILLS" self bogus
+# Regression: `shorten` used "${1//$HOME/\~}", and bash 3.2 keeps that
+# backslash. The literal \~ was written into the config, never expanded back,
+# and the registered source silently vanished — macOS only.
+if grep -q '\\~' "$MANAGE_SKILLS_HOME/sources"; then
+  fail "config holds no unexpandable paths" "sources contains a literal backslash-tilde"
+else
+  pass "config holds no unexpandable paths"
+fi
+SELF_OUT=$("$MANAGE_SKILLS" self 2>&1)
+case "$SELF_OUT" in
+  *'\~'*) fail "shorten emits a bare tilde" "output contains a literal backslash-tilde" ;;
+  *)      pass "shorten emits a bare tilde" ;;
+esac
 "$MANAGE_SKILLS" sources remove "$REPO_DIR/.claude/skills" >/dev/null 2>&1
 
 echo ""
