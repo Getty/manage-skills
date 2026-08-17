@@ -52,6 +52,14 @@ assert_output_contains() {
   fi
 }
 
+# GNU stat first, BSD as fallback — same order as is_hardlinked() in the
+# script. Reversed, `stat -f %i` on GNU treats %i as a filename, prints
+# filesystem info to stdout and exits 1, so the fallback's real inode gets
+# appended to that garbage and every inode comparison fails.
+inode() {
+  stat -c %i "$1" 2>/dev/null || stat -f %i "$1" 2>/dev/null
+}
+
 assert_output_matches() {
   local pattern="$1" desc="$2"
   shift 2
@@ -120,8 +128,8 @@ assert_exit 0 "link test-skill" "$MANAGE_SKILLS" link test-skill
 test -f "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md" && pass "skill file exists after link" || fail "skill file exists after link"
 
 # Verify hardlink (same inode)
-INODE_SRC=$(stat -f %i "$SOURCE_DIR/test-skill/SKILL.md" 2>/dev/null || stat -c %i "$SOURCE_DIR/test-skill/SKILL.md" 2>/dev/null)
-INODE_DST=$(stat -f %i "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md" 2>/dev/null || stat -c %i "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md" 2>/dev/null)
+INODE_SRC=$(inode "$SOURCE_DIR/test-skill/SKILL.md")
+INODE_DST=$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")
 if [ "$INODE_SRC" = "$INODE_DST" ]; then
   pass "hardlink shares inode"
 else
@@ -149,8 +157,8 @@ assert_output_contains "relinked" "sync relinks broken copy" "$MANAGE_SKILLS" sy
 rm "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
 echo "# Test Skill (modified copy)" > "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
 "$MANAGE_SKILLS" sync >/dev/null 2>&1
-INODE_SRC2=$(stat -f %i "$SOURCE_DIR/test-skill/SKILL.md" 2>/dev/null || stat -c %i "$SOURCE_DIR/test-skill/SKILL.md" 2>/dev/null)
-INODE_DST2=$(stat -f %i "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md" 2>/dev/null || stat -c %i "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md" 2>/dev/null)
+INODE_SRC2=$(inode "$SOURCE_DIR/test-skill/SKILL.md")
+INODE_DST2=$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")
 if [ "$INODE_SRC2" = "$INODE_DST2" ]; then
   pass "sync restores hardlink"
 else
@@ -158,9 +166,32 @@ else
 fi
 
 echo ""
+echo "Project-owned skills"
+# Regression: an original (a skill the project owns, provided by no source)
+# used to abort `check` — `grep` found nothing, `set -o pipefail` turned that
+# into exit 1 and `set -e` killed the run before the originals branch ever ran.
+mkdir -p "$PROJECT_DIR/.claude/skills/project-original"
+echo "# Original" > "$PROJECT_DIR/.claude/skills/project-original/SKILL.md"
+assert_exit 0 "check survives a project-owned skill" "$MANAGE_SKILLS" check
+assert_output_matches "1 originals?" "check counts the original" "$MANAGE_SKILLS" check
+assert_output_contains "project-original" "list shows the original" "$MANAGE_SKILLS" list
+assert_exit 0 "sync survives a project-owned skill" "$MANAGE_SKILLS" sync
+rm -rf "$PROJECT_DIR/.claude/skills/project-original"
+
+echo ""
+echo "Config repair"
+# Regression: ensure_config bailed out on an existing directory, so a config
+# dir without a targets file left every command dying on "Unknown target".
+BARE_HOME="$TMPDIR_BASE/bare-config"
+mkdir -p "$BARE_HOME"
+assert_exit 0 "init repairs a config dir with no files" env MANAGE_SKILLS_HOME="$BARE_HOME" "$MANAGE_SKILLS" init
+test -f "$BARE_HOME/targets" && pass "targets file recreated" || fail "targets file recreated"
+
+echo ""
 echo "Error handling"
 assert_exit 1 "unknown command fails" "$MANAGE_SKILLS" bogus-command
 assert_exit 1 "link without args fails" "$MANAGE_SKILLS" link
+assert_exit 1 "dangling --target on link fails" "$MANAGE_SKILLS" link some-skill --target
 
 # ── Summary ─────────────────────────────────────────────────────────
 
