@@ -1,0 +1,20 @@
+{
+  "name": "getty-manage-skills",
+  "owner": {
+    "name": "Torsten Raudssus",
+    "url": "https://github.com/Getty"
+  },
+  "description": "Hardlink-based skill sharing across AI coding tool projects.",
+  "plugins": [
+    {
+      "name": "manage-skills",
+      "source": "./",
+      "description": "Hardlink-based skill sharing across projects — one source of truth per skill, hardlinks everywhere else. Puts the manage-skills CLI on PATH and ships its own skills.",
+      "version": "0.2.0",
+      "license": "MIT",
+      "homepage": "https://github.com/Getty/manage-skills",
+      "category": "productivity",
+      "tags": ["skills", "hardlinks", "sync"]
+    }
+  ]
+}

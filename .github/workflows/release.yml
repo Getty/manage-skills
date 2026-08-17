@@ -68,9 +68,15 @@ jobs:
         run: |
           NEW_VERSION="${{ steps.version.outputs.new_tag }}"
           NEW_VERSION="${NEW_VERSION#v}"
+          # Three places carry the version: the script, the plugin manifest and
+          # the marketplace entry. The smoke tests fail if they diverge.
           sed -i.bak "s/^VERSION=\".*\"$/VERSION=\"${NEW_VERSION}\"/" manage-skills
-          rm -f manage-skills.bak
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" .claude-plugin/plugin.json
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" .claude-plugin/marketplace.json
+          rm -f manage-skills.bak .claude-plugin/*.bak
           grep -q "^VERSION=\"${NEW_VERSION}\"$" manage-skills
+          grep -q "\"version\": \"${NEW_VERSION}\"" .claude-plugin/plugin.json
+          grep -q "\"version\": \"${NEW_VERSION}\"" .claude-plugin/marketplace.json
 
           if git diff --quiet; then
             echo "VERSION already in sync, nothing to commit"
