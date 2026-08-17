@@ -2,6 +2,9 @@
 set -euo pipefail
 
 VERSION="0.2.0"
+SELF_REPO="${MANAGE_SKILLS_REPO:-Getty/manage-skills}"
+# Skills this tool ships. Kept in sync with .claude/skills/ by the smoke tests.
+SELF_SKILLS="manage-skills manage-skills-drift-triage"
 CONFIG_DIR="${MANAGE_SKILLS_HOME:-$HOME/.manage-skills}"
 SOURCES_FILE="$CONFIG_DIR/sources"
 TARGETS_FILE="$CONFIG_DIR/targets"
@@ -37,11 +40,13 @@ ensure_config() {
   cat > "$SOURCES_FILE" << 'SOURCES'
 # manage-skills source directories
 # One directory per line. These are scanned for skill files.
+# Order is priority: when two sources provide the same skill name, the first wins.
 # Lines starting with # are ignored. ~ is expanded.
+# A trailing "# label" describes the source and shows up in 'locations'.
 #
 # Example:
-# ~/dev/shared-skills
-# ~/dev/perl/shared-skills
+# ~/dev/shared-skills        # Cross-language: K8s, CI, tools
+# ~/dev/perl/shared-skills   # Shared Perl ecosystem
 SOURCES
   warn "No sources configured yet. Run: manage-skills sources add ~/dev/shared-skills"
 }
@@ -52,14 +57,52 @@ expand_path() {
   echo "$p"
 }
 
-read_sources() {
+trim() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"
+  echo "${v%"${v##*[![:space:]]}"}"
+}
+
+# Splits a source line into SOURCE_PATH and SOURCE_LABEL. A source line may
+# carry a trailing "# label" saying what lives there:
+#   ~/dev/shared-skills   # Cross-language: K8s, CI, tools
+SOURCE_PATH=""
+SOURCE_LABEL=""
+parse_source_line() {
+  local line="$1"
+  SOURCE_LABEL=""
+  [[ "$line" == *"#"* ]] && SOURCE_LABEL=$(trim "${line#*#}")
+  SOURCE_PATH=$(trim "${line%%#*}")
+}
+
+# Emits "expanded_path<TAB>label" per configured source, existing ones only.
+read_source_lines() {
   [[ -f "$SOURCES_FILE" ]] || return
+  local line expanded
   while IFS= read -r line; do
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-    local expanded
-    expanded=$(expand_path "$line")
-    [[ -d "$expanded" ]] && echo "$expanded"
+    parse_source_line "$line"
+    [[ -z "$SOURCE_PATH" ]] && continue
+    expanded=$(expand_path "$SOURCE_PATH")
+    [[ -d "$expanded" ]] && printf '%s\t%s\n' "$expanded" "$SOURCE_LABEL"
   done < "$SOURCES_FILE"
+}
+
+read_sources() {
+  local path label
+  while IFS=$'\t' read -r path label; do
+    echo "$path"
+  done < <(read_source_lines)
+}
+
+# All skills a source directory provides, in glob order, without dedup.
+list_source_skills() {
+  local source_dir="$1" target_file="${2:-SKILL.md}"
+  local skill_dir
+  for skill_dir in "$source_dir"/*/; do
+    [[ -f "$skill_dir/$target_file" ]] || continue
+    basename "$skill_dir"
+  done
 }
 
 read_targets() {
@@ -68,6 +111,23 @@ read_targets() {
     [[ -z "$name" || "$name" =~ ^[[:space:]]*# ]] && continue
     echo "$name:$path:$file"
   done < "$TARGETS_FILE"
+}
+
+# Resolves the target for commands that take no skill arguments. Accepts both
+# `<command> <target>` and `<command> --target <name>`; the help text advertises
+# the flag globally, so every command honours it.
+resolve_target_arg() {
+  local t="claude"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --target|-t)
+        [[ -n "${2:-}" ]] || die "Missing value for $1"
+        t="$2"; shift 2 ;;
+      -*)          shift ;;
+      *)           t="$1"; shift ;;
+    esac
+  done
+  echo "$t"
 }
 
 get_target() {
@@ -109,6 +169,78 @@ is_hardlinked() {
   [[ "$inode_p" == "$inode_s" ]]
 }
 
+# ── Layout ───────────────────────────────────────────────────────────
+
+term_width() {
+  # No `[[ -t 1 ]]` guard: this runs inside $(...), where stdout is a pipe.
+  # tput falls back to the terminfo default when there is no terminal.
+  local w=""
+  w=$(tput cols 2>/dev/null || true)
+  [[ -n "$w" ]] || w="${COLUMNS:-}"
+  case "$w" in
+    ''|*[!0-9]*) w=80 ;;
+  esac
+  [[ "$w" -lt 24 ]] && w=80
+  echo "$w"
+}
+
+# Reads "<visible_width>\t<rendered_text>" lines from stdin and prints them as
+# a multi-column grid, filling column-major like `ls`. The visible width is
+# passed in rather than measured: the rendered text carries ANSI escapes and a
+# multibyte ● marker, both of which ${#var} counts wrong.
+print_grid() {
+  local term_w="$1" gutter="${2:-2}"
+  local cell_w=() cell_txt=()
+  local lw lt
+  while IFS=$'\t' read -r lw lt; do
+    cell_w[${#cell_w[@]}]="$lw"
+    cell_txt[${#cell_txt[@]}]="$lt"
+  done
+  local n=${#cell_w[@]}
+  [[ "$n" -eq 0 ]] && return
+
+  local maxw=0 i
+  for ((i = 0; i < n; i++)); do
+    [[ "${cell_w[$i]}" -gt "$maxw" ]] && maxw=${cell_w[$i]}
+  done
+
+  local colw=$((maxw + gutter))
+  local cols=$(( (term_w - 2) / colw ))
+  [[ "$cols" -lt 1 ]] && cols=1
+  [[ "$cols" -gt "$n" ]] && cols=$n
+  local rows=$(( (n + cols - 1) / cols ))
+
+  local row col idx
+  for ((row = 0; row < rows; row++)); do
+    printf "  "
+    for ((col = 0; col < cols; col++)); do
+      idx=$((col * rows + row))
+      [[ "$idx" -ge "$n" ]] && continue
+      printf "%s" "${cell_txt[$idx]}"
+      # no trailing padding on the last cell of a row
+      [[ $((idx + rows)) -lt "$n" ]] && printf "%*s" "$((colw - ${cell_w[$idx]}))" ""
+    done
+    printf "\n"
+  done
+}
+
+# Sets MARKER and MARKER_COLOR for a skill's link state.
+# Globals instead of a subshell: this runs once per skill.
+MARKER=""
+MARKER_COLOR=""
+skill_marker() {
+  local project_file="$1" source_file="$2"
+  if [[ -f "$project_file" ]]; then
+    if is_hardlinked "$project_file" "$source_file" 2>/dev/null; then
+      MARKER="[*]"; MARKER_COLOR="$GREEN"
+    else
+      MARKER="[~]"; MARKER_COLOR="$YELLOW"
+    fi
+  else
+    MARKER="[ ]"; MARKER_COLOR="$DIM"
+  fi
+}
+
 # ── Commands ─────────────────────────────────────────────────────────
 
 cmd_init() {
@@ -133,23 +265,28 @@ cmd_sources() {
         warn "No sources configured. Run: manage-skills init"
         return
       fi
-      echo "${BOLD}Skill sources:${RESET}"
+      echo "${BOLD}Skill sources:${RESET} ${DIM}(first match wins)${RESET}"
       while IFS= read -r line; do
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-        local expanded
-        expanded=$(expand_path "$line")
+        parse_source_line "$line"
+        [[ -z "$SOURCE_PATH" ]] && continue
+        local expanded note=""
+        [[ -n "$SOURCE_LABEL" ]] && note=" — $SOURCE_LABEL"
+        expanded=$(expand_path "$SOURCE_PATH")
         if [[ -d "$expanded" ]]; then
           local count
-          count=$(find "$expanded" -maxdepth 2 -name "*.md" -type f 2>/dev/null | wc -l)
-          echo "  ${GREEN}●${RESET} $line  ${DIM}($count skills)${RESET}"
+          count=$(list_source_skills "$expanded" | wc -l | tr -d ' ')
+          echo "  ${GREEN}●${RESET} $SOURCE_PATH  ${DIM}($count skills)$note${RESET}"
         else
-          echo "  ${RED}●${RESET} $line  ${DIM}(not found)${RESET}"
+          echo "  ${RED}●${RESET} $SOURCE_PATH  ${DIM}(not found)$note${RESET}"
         fi
       done < "$SOURCES_FILE"
       ;;
     add)
-      [[ -z "${1:-}" ]] && die "Usage: manage-skills sources add <directory>"
+      [[ -z "${1:-}" ]] && die "Usage: manage-skills sources add <directory> [label...]"
       local dir="$1"
+      shift
+      local label="$*"
       local expanded
       expanded=$(expand_path "$dir")
       [[ -d "$expanded" ]] || die "Directory not found: $expanded"
@@ -158,8 +295,13 @@ cmd_sources() {
         warn "Already in sources: $dir"
         return
       fi
-      echo "$dir" >> "$SOURCES_FILE"
-      info "Added: $dir"
+      if [[ -n "$label" ]]; then
+        printf '%s   # %s\n' "$dir" "$label" >> "$SOURCES_FILE"
+        info "Added: $dir — $label"
+      else
+        echo "$dir" >> "$SOURCES_FILE"
+        info "Added: $dir"
+      fi
       ;;
     remove)
       [[ -z "${1:-}" ]] && die "Usage: manage-skills sources remove <directory>"
@@ -200,49 +342,72 @@ cmd_targets() {
 }
 
 cmd_list() {
-  local target_name="${1:-claude}"
+  local target_name
+  target_name=$(resolve_target_arg "$@")
   local target_info
   target_info=$(get_target "$target_name")
   local target_path="${target_info%%:*}"
   local target_file="${target_info##*:}"
-
   local project_skills_dir="$PWD/$target_path"
 
-  echo "${BOLD}Available skills${RESET} ${DIM}(target: $target_name)${RESET}"
-  echo ""
+  # Grid only on a terminal — piped output stays one skill per line so it
+  # keeps working with grep/awk.
+  local grid=false
+  [[ -t 1 ]] && grid=true
+  local width
+  width=$(term_width)
 
-  local has_skills=false
+  echo "${BOLD}Available skills${RESET} ${DIM}(target: $target_name)${RESET}"
+  $grid || echo ""
+
+  local has_skills=false seen="" group="" buf=""
+
   while IFS=: read -r source_dir skill_name; do
     has_skills=true
-    local source_file="$source_dir/$skill_name/$target_file"
-    local project_file="$project_skills_dir/$skill_name/$target_file"
+    seen="$seen,$skill_name"
+    skill_marker "$project_skills_dir/$skill_name/$target_file" \
+                 "$source_dir/$skill_name/$target_file"
 
-    local short_source="$(shorten "$source_dir")"
-    if [[ -f "$project_file" ]]; then
-      if is_hardlinked "$project_file" "$source_file"; then
-        echo "  ${GREEN}[*]${RESET} $skill_name  ${DIM}← $short_source${RESET}"
-      else
-        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(local copy, not linked)${RESET}"
+    if $grid; then
+      if [[ "$source_dir" != "$group" ]]; then
+        [[ -n "$buf" ]] && printf '%s' "$buf" | print_grid "$width"
+        buf=""
+        group="$source_dir"
+        echo ""
+        echo "${BOLD}$(shorten "$source_dir")${RESET}"
       fi
+      buf="$buf$((4 + ${#skill_name}))	$MARKER_COLOR$MARKER$RESET $skill_name"$'\n'
     else
-      echo "  ${DIM}[ ]${RESET} $skill_name  ${DIM}← $short_source${RESET}"
+      case "$MARKER" in
+        '[~]') echo "  ${MARKER_COLOR}${MARKER}${RESET} $skill_name  ${DIM}(local copy, not linked)${RESET}" ;;
+        *)     echo "  ${MARKER_COLOR}${MARKER}${RESET} $skill_name  ${DIM}← $(shorten "$source_dir")${RESET}" ;;
+      esac
     fi
   done < <(discover_skills "$target_file")
 
-  # Show originals (skills in project that aren't from any source)
+  [[ -n "$buf" ]] && printf '%s' "$buf" | print_grid "$width"
+  buf=""
+
+  # Originals: skills the project owns, with no source providing that name.
   if [[ -d "$project_skills_dir" ]]; then
+    local first_original=true
     for skill_dir in "$project_skills_dir"/*/; do
       [[ -f "$skill_dir/$target_file" ]] || continue
       local skill_name
       skill_name=$(basename "$skill_dir")
-      local is_from_source=false
-      while IFS=: read -r source_dir sname; do
-        [[ "$sname" == "$skill_name" ]] && is_from_source=true && break
-      done < <(discover_skills "$target_file")
-      if ! $is_from_source; then
+      case ",$seen," in *,"$skill_name",*) continue ;; esac
+      if $grid; then
+        if $first_original; then
+          first_original=false
+          echo ""
+          echo "${BOLD}This project${RESET} ${DIM}(source of truth)${RESET}"
+        fi
+        buf="$buf$((4 + ${#skill_name}))	 ${CYAN}●${RESET} $skill_name"$'\n'
+      else
         echo "   ●  $skill_name  ${DIM}(original)${RESET}"
       fi
     done
+    [[ -n "$buf" ]] && printf '%s' "$buf" | print_grid "$width"
   fi
 
   if ! $has_skills; then
@@ -251,6 +416,260 @@ cmd_list() {
 
   echo ""
   echo "${DIM}Legend: [*] hardlinked  [~] local copy  [ ] available  ● original${RESET}"
+}
+
+cmd_locations() {
+  local target_name
+  target_name=$(resolve_target_arg "$@")
+  local target_info
+  target_info=$(get_target "$target_name")
+  local target_path="${target_info%%:*}"
+  local target_file="${target_info##*:}"
+  local project_skills_dir="$PWD/$target_path"
+
+  local grid=false
+  [[ -t 1 ]] && grid=true
+  local width
+  width=$(term_width)
+
+  echo "${BOLD}Skill locations${RESET} ${DIM}(target: $target_name)${RESET}"
+
+  local seen="" shadowed=0 any=false
+  local source_dir label buf name skill_dir
+
+  while IFS=$'\t' read -r source_dir label; do
+    any=true
+    echo ""
+    if [[ -n "$label" ]]; then
+      echo "${BOLD}$(shorten "$source_dir")${RESET}  ${DIM}— $label${RESET}"
+    else
+      echo "${BOLD}$(shorten "$source_dir")${RESET}"
+    fi
+
+    buf=""
+    while IFS= read -r name; do
+      case ",$seen," in
+        *,"$name",*)
+          # An earlier source already provides this name, so this copy never
+          # wins a link or a sync — the silent shadowing case.
+          shadowed=$((shadowed + 1))
+          buf="$buf$((${#name} + 1))"$'\t'"${DIM}$name*${RESET}"$'\n'
+          ;;
+        *)
+          seen="$seen,$name"
+          buf="$buf${#name}"$'\t'"$name"$'\n'
+          ;;
+      esac
+    done < <(list_source_skills "$source_dir" "$target_file")
+
+    if [[ -z "$buf" ]]; then
+      echo "  ${DIM}(no skills)${RESET}"
+    elif $grid; then
+      printf '%s' "$buf" | print_grid "$width"
+    else
+      printf '%s' "$buf" | cut -f2- | sed 's/^/  /'
+    fi
+  done < <(read_source_lines)
+
+  if ! $any; then
+    echo ""
+    warn "No sources configured. Run: manage-skills sources add <dir> [label]"
+  fi
+
+  # Skills this project owns outright — no source provides that name.
+  if [[ -d "$project_skills_dir" ]]; then
+    buf=""
+    for skill_dir in "$project_skills_dir"/*/; do
+      [[ -f "$skill_dir/$target_file" ]] || continue
+      name=$(basename "$skill_dir")
+      case ",$seen," in *,"$name",*) continue ;; esac
+      buf="$buf${#name}"$'\t'"${CYAN}$name${RESET}"$'\n'
+    done
+    if [[ -n "$buf" ]]; then
+      echo ""
+      echo "${BOLD}Owned by $(basename "$PWD")${RESET} ${DIM}(source of truth — no source provides these)${RESET}"
+      if $grid; then
+        printf '%s' "$buf" | print_grid "$width"
+      else
+        printf '%s' "$buf" | cut -f2- | sed 's/^/  /'
+      fi
+    fi
+  fi
+
+  if [[ $shadowed -gt 0 ]]; then
+    echo ""
+    echo "${DIM}* shadowed — an earlier source already provides that name, so this${RESET}"
+    echo "${DIM}  copy never wins a link or a sync. Reorder $SOURCES_FILE to change it.${RESET}"
+  fi
+
+  # Hand-written context that cannot be derived: naming conventions, which
+  # skills pair up, which ones are conditional.
+  local notes_file="$CONFIG_DIR/notes.md"
+  echo ""
+  if [[ -f "$notes_file" ]]; then
+    echo "${BOLD}Notes${RESET} ${DIM}$(shorten "$notes_file")${RESET}"
+    sed 's/^/  /' "$notes_file"
+  else
+    echo "${DIM}Conventions and other hand-written context: create $(shorten "$notes_file")${RESET}"
+  fi
+}
+
+# ── Self ─────────────────────────────────────────────────────────────
+
+# Absolute directory of the running script, following symlinks. install.sh
+# symlinks the script into a bin dir in dev mode, so $0's own directory is the
+# bin dir, not the checkout.
+self_script_path() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [[ -L "$src" ]]; do
+    dir=$(cd -P "$(dirname "$src")" && pwd)
+    src=$(readlink "$src")
+    [[ "$src" != /* ]] && src="$dir/$src"
+  done
+  echo "$(cd -P "$(dirname "$src")" && pwd)/$(basename "$src")"
+}
+
+# clone | plugin | standalone — how this copy got here decides how it updates.
+self_install_kind() {
+  local dir
+  dir=$(dirname "$(self_script_path)")
+  case "$dir" in
+    */plugins/cache/*) echo "plugin"; return ;;
+  esac
+  if git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "clone"
+  else
+    echo "standalone"
+  fi
+}
+
+# Where this installation's own skills live, if anywhere.
+self_skills_dir() {
+  local dir
+  dir=$(dirname "$(self_script_path)")
+  [[ -d "$dir/skills" ]] && { echo "$dir/skills"; return; }
+  [[ -d "$dir/.claude/skills" ]] && { echo "$dir/.claude/skills"; return; }
+  [[ -d "$CONFIG_DIR/skills" ]] && { echo "$CONFIG_DIR/skills"; return; }
+  return 1
+}
+
+fetch_url() {
+  local url="$1" dest="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$dest"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$dest" "$url"
+  else
+    die "Neither curl nor wget found — cannot download from $SELF_REPO"
+  fi
+}
+
+# Downloads the shipped skills into the config dir, so a standalone install
+# (curl one-liner, no checkout) still has them.
+self_download_skills() {
+  local dest="$CONFIG_DIR/skills"
+  local base="https://raw.githubusercontent.com/$SELF_REPO/main/.claude/skills"
+  local name
+  for name in $SELF_SKILLS; do
+    mkdir -p "$dest/$name"
+    # `cat >` over the existing file so a hardlinked copy keeps its inode.
+    local tmp
+    tmp=$(mktemp)
+    if fetch_url "$base/$name/SKILL.md" "$tmp"; then
+      cat "$tmp" > "$dest/$name/SKILL.md"
+      rm -f "$tmp"
+      echo "  ${GREEN}fetched${RESET} $name"
+    else
+      rm -f "$tmp"
+      warn "  could not fetch $name"
+    fi
+  done
+  echo "$dest"
+}
+
+cmd_self() {
+  local subcmd="${1:-status}"
+  shift 2>/dev/null || true
+
+  local script_path kind skills_dir
+  script_path=$(self_script_path)
+  kind=$(self_install_kind)
+  skills_dir=$(self_skills_dir || true)
+
+  case "$subcmd" in
+    status)
+      echo "${BOLD}manage-skills${RESET} v$VERSION"
+      echo "  script    $(shorten "$script_path")  ${DIM}($kind)${RESET}"
+      echo "  config    $(shorten "$CONFIG_DIR")"
+      if [[ -n "$skills_dir" ]]; then
+        echo "  skills    $(shorten "$skills_dir")  ${DIM}($(list_source_skills "$skills_dir" | wc -l | tr -d ' ') shipped)${RESET}"
+        if read_sources | grep -qxF "$skills_dir"; then
+          echo "            ${GREEN}registered as a source${RESET}"
+        else
+          echo "            ${YELLOW}not registered${RESET} — run: manage-skills self install"
+        fi
+      else
+        echo "  skills    ${YELLOW}not present${RESET} — run: manage-skills self install"
+      fi
+      ;;
+    install)
+      if [[ -z "$skills_dir" ]]; then
+        info "Fetching shipped skills from $SELF_REPO"
+        skills_dir=$(self_download_skills | tail -1)
+      fi
+      if read_sources | grep -qxF "$skills_dir"; then
+        info "Already a source: $(shorten "$skills_dir")"
+      else
+        # Appended, so it stays lowest priority — your own skills win.
+        printf '%s   # %s\n' "$(shorten "$skills_dir")" "Shipped with manage-skills" >> "$SOURCES_FILE"
+        info "Registered as a source: $(shorten "$skills_dir")"
+      fi
+      echo ""
+      echo "Link them into a project with:"
+      echo "  manage-skills link $SELF_SKILLS"
+      ;;
+    update)
+      case "$kind" in
+        clone)
+          local dir
+          dir=$(dirname "$script_path")
+          info "Installed from a checkout — update it with git:"
+          echo "  git -C $(shorten "$dir") pull"
+          ;;
+        plugin)
+          info "Installed as a Claude Code plugin — update it from Claude Code:"
+          echo "  /plugin update manage-skills"
+          ;;
+        standalone)
+          local tmp
+          tmp=$(mktemp)
+          info "Fetching https://raw.githubusercontent.com/$SELF_REPO/main/manage-skills"
+          fetch_url "https://raw.githubusercontent.com/$SELF_REPO/main/manage-skills" "$tmp" \
+            || { rm -f "$tmp"; die "Download failed"; }
+          bash -n "$tmp" 2>/dev/null || { rm -f "$tmp"; die "Downloaded script failed the syntax check — not installing"; }
+          local new_version
+          new_version=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
+          if [[ "$new_version" == "$VERSION" ]]; then
+            rm -f "$tmp"
+            info "Already on the latest version ($VERSION)"
+            return
+          fi
+          # exec so the running shell stops reading this file before it changes.
+          echo "  ${GREEN}updating${RESET} $VERSION → $new_version"
+          exec sh -c "cat '$tmp' > '$script_path' && chmod +x '$script_path' && rm -f '$tmp' && echo '  manage-skills is now $new_version'"
+          ;;
+      esac
+      if [[ -n "$skills_dir" && "$skills_dir" == "$CONFIG_DIR/skills" ]]; then
+        echo ""
+        info "Refreshing shipped skills"
+        self_download_skills >/dev/null
+        info "Run 'manage-skills sync' in your projects to propagate"
+      fi
+      ;;
+    *)
+      die "Unknown self command: $subcmd (use status, install, update)"
+      ;;
+  esac
 }
 
 cmd_link() {
@@ -335,7 +754,8 @@ cmd_unlink() {
 }
 
 cmd_sync() {
-  local target_name="${1:-claude}"
+  local target_name
+  target_name=$(resolve_target_arg "$@")
   local target_info
   target_info=$(get_target "$target_name")
   local target_path="${target_info%%:*}"
@@ -369,7 +789,8 @@ cmd_sync() {
 }
 
 cmd_check() {
-  local target_name="${1:-claude}"
+  local target_name
+  target_name=$(resolve_target_arg "$@")
   local target_info
   target_info=$(get_target "$target_name")
   local target_path="${target_info%%:*}"
@@ -422,7 +843,8 @@ cmd_check() {
 # ── Interactive Mode (fzf or fallback) ───────────────────────────────
 
 cmd_interactive() {
-  local target_name="${1:-claude}"
+  local target_name
+  target_name=$(resolve_target_arg "$@")
   local target_info
   target_info=$(get_target "$target_name")
   local target_path="${target_info%%:*}"
@@ -553,21 +975,35 @@ _interactive_basic() {
   done < <(discover_skills "$target_file")
 
   local -a original_states=("${states[@]}")
+  local width
+  width=$(term_width)
 
   while true; do
     clear 2>/dev/null || true
     echo "${BOLD}Skills for $(basename "$PWD")${RESET}"
     echo ""
 
-    for i in "${!names[@]}"; do
-      local num=$((i + 1))
-      local short_source="$(shorten "${sources[$i]}")"
-      if [[ "${states[$i]}" == "[*]" ]]; then
-        printf "  ${GREEN}%2d) %s${RESET} %-30s ${DIM}← %s${RESET}\n" "$num" "${states[$i]}" "${names[$i]}" "$short_source"
-      else
-        printf "  %2d) %s %-30s ${DIM}← %s${RESET}\n" "$num" "${states[$i]}" "${names[$i]}" "$short_source"
+    local total=${#names[@]}
+    local numw=${#total}
+    local group="" buf="" i color
+    for ((i = 0; i < total; i++)); do
+      if [[ "${sources[$i]}" != "$group" ]]; then
+        if [[ -n "$buf" ]]; then
+          printf '%s' "$buf" | print_grid "$width"
+          echo ""
+        fi
+        buf=""
+        group="${sources[$i]}"
+        echo "${BOLD}$(shorten "$group")${RESET}"
       fi
+      case "${states[$i]}" in
+        '[*]') color="$GREEN" ;;
+        '[~]') color="$YELLOW" ;;
+        *)     color="$DIM" ;;
+      esac
+      buf="$buf$((numw + 6 + ${#names[$i]}))"$'\t'"${DIM}$(printf "%${numw}d" $((i + 1))))${RESET} $color${states[$i]}$RESET ${names[$i]}"$'\n'
     done
+    [[ -n "$buf" ]] && printf '%s' "$buf" | print_grid "$width"
 
     echo ""
     echo "${DIM}Enter number to toggle, 'a' to apply changes, 'q' to quit${RESET}"
@@ -609,15 +1045,22 @@ cmd_help() {
 ${BOLD}USAGE${RESET}
   manage-skills                    Interactive mode (fzf or menu)
   manage-skills list               List all available skills
+  manage-skills locations          Show where skills come from, per source
   manage-skills link <skill>...    Hardlink skills into current project
   manage-skills unlink <skill>...  Remove skills from current project
   manage-skills sync               Re-hardlink stale copies
   manage-skills check              Verify hardlink integrity
 
+${BOLD}SELF${RESET}
+  manage-skills self               Where this install and its own skills live
+  manage-skills self install       Register the shipped skills as a source
+  manage-skills self update        Update the script and the shipped skills
+
 ${BOLD}CONFIG${RESET}
   manage-skills init               Create ~/.manage-skills/ config
   manage-skills sources            List source directories
-  manage-skills sources add <dir>  Add a skill source directory
+  manage-skills sources add <dir> [label]
+                                   Add a skill source, with an optional label
   manage-skills sources remove <dir>
   manage-skills targets            List configured targets
   manage-skills targets add <name> <path> <file>
@@ -628,13 +1071,16 @@ ${BOLD}OPTIONS${RESET}
   --help, -h            Show this help
 
 ${BOLD}CONFIG FILES${RESET}
-  ~/.manage-skills/sources   Skill source directories (one per line)
+  ~/.manage-skills/sources   Skill source directories, one per line, each with
+                             an optional trailing '# label'
   ~/.manage-skills/targets   Target definitions (name:path:file)
+  ~/.manage-skills/notes.md  Optional free-form notes, appended to 'locations'
 
 ${BOLD}EXAMPLES${RESET}
   manage-skills init
-  manage-skills sources add ~/dev/shared-skills
-  manage-skills sources add ~/dev/perl/shared-skills
+  manage-skills sources add ~/dev/shared-skills Cross-language: K8s, CI, tools
+  manage-skills sources add ~/dev/perl/shared-skills Shared Perl ecosystem
+  manage-skills locations                   # where does everything come from?
   cd ~/my-project && manage-skills          # interactive
   manage-skills link perl-moo dbio-core     # link specific skills
   manage-skills check                       # verify everything"
@@ -646,6 +1092,9 @@ case "${1:-}" in
   "")           cmd_interactive ;;
   init)         cmd_init ;;
   list)         shift; cmd_list "$@" ;;
+  locations)    shift; cmd_locations "$@" ;;
+  self)         shift; cmd_self "$@" ;;
+  selfupdate)   shift; cmd_self update "$@" ;;
   link)         shift; cmd_link "$@" ;;
   unlink)       shift; cmd_unlink "$@" ;;
   sync)         shift; cmd_sync "$@" ;;

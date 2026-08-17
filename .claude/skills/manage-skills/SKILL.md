@@ -1,6 +1,6 @@
 ---
 name: manage-skills
-description: "manage-skills CLI — hardlink-based skill sharing across AI coding tool projects. Use when adding, removing, syncing, or checking shared skills."
+description: "manage-skills CLI — hardlink-based skill sharing across AI coding tool projects. Use when adding, removing, syncing, editing, or checking shared skills, when asking where a skill comes from, or before editing any hardlinked SKILL.md."
 user-invocable: true
 ---
 
@@ -8,22 +8,33 @@ user-invocable: true
 
 CLI tool for managing shared skill files across projects via hardlinks. Config lives in `~/.manage-skills/`.
 
+> **⚠️ Editing a linked SKILL.md? Use `cat > file` — NOT the `Edit`/`Write` tools.**
+> They rewrite-and-replace → new inode → silently breaks the hardlink to every other
+> project sharing that file. Full rules + repair in
+> [Editing hardlinked skills](#editing-hardlinked-skills--do-not-break-the-inode) below.
+
 ## Commands
 
 ```bash
 manage-skills                        # Interactive mode (fzf or numbered menu)
 manage-skills list                   # Show all skills with status
+manage-skills locations              # Where skills come from, per source
 manage-skills link <skill>...        # Hardlink skills into current project
 manage-skills unlink <skill>...      # Remove skills from current project
 manage-skills sync                   # Re-hardlink stale copies
 manage-skills check                  # Verify hardlink integrity
 manage-skills sources                # List source directories
-manage-skills sources add <dir>      # Add a skill source
+manage-skills sources add <dir> [label]  # Add a skill source
 manage-skills sources remove <dir>   # Remove a skill source
 manage-skills targets                # List configured targets
 manage-skills targets add <n> <p> <f> # Add target (name:path:file)
+manage-skills self                   # Where this install and its own skills live
+manage-skills self install           # Register the shipped skills as a source
+manage-skills self update            # Update the script and the shipped skills
 manage-skills init                   # Create ~/.manage-skills/ config
 ```
+
+Every command takes `--target <name>` (default: `claude`).
 
 ## Status Icons
 
@@ -32,14 +43,45 @@ manage-skills init                   # Create ~/.manage-skills/ config
 - `[ ]` — available but not linked
 - `●` — original, this project is the source of truth
 
-## Config
+On a terminal, `list` and `locations` group skills by source and lay each group out in
+columns. Piped output stays one skill per line, so `manage-skills list | grep …` works.
 
-`~/.manage-skills/sources` — one source directory per line:
+## Where skills live — ask the tool, don't keep a list
+
+`manage-skills locations` renders the whole picture from config and disk: every source
+with its label and the skills it provides, the skills the current project owns outright,
+and any name **shadowed** by an earlier source (marked `*` — that copy never wins a link
+or a sync, which is a common silent drift cause).
+
+A hand-maintained inventory of the same thing goes stale the first time a skill moves.
+The three things that genuinely can't be derived — naming conventions, which skills pair
+up, which ones are conditional — belong in `~/.manage-skills/notes.md`, which `locations`
+prints at the end.
+
+## This tool ships its own skills
+
+`manage-skills` and `manage-skills-drift-triage` come with the tool.
+`manage-skills self install` registers them as a (lowest-priority) source, so they link
+like anything else. `manage-skills self` shows where they are and whether they're
+registered; `manage-skills self update` refreshes them.
+
+Installing the Claude Code plugin does the same thing a different way — it puts the CLI
+on `PATH` and loads both skills:
 
 ```
-~/dev/shared-skills
-~/dev/perl/shared-skills
-~/dev/perl/dbio-dev/.claude/skills
+/plugin marketplace add Getty/manage-skills
+/plugin install manage-skills@getty-manage-skills
+```
+
+## Config
+
+`~/.manage-skills/sources` — one source directory per line, in priority order (first
+match wins). A trailing `# label` describes the source and shows up in `locations`:
+
+```
+~/dev/shared-skills        # Cross-language: K8s, CI, GPU, tools
+~/dev/perl/shared-skills   # Shared Perl ecosystem
+~/dev/perl/dbio-dev/.claude/skills   # DBIO ORM, per-repo sources
 ```
 
 `~/.manage-skills/targets` — format `name:path:file`:
@@ -48,15 +90,18 @@ manage-skills init                   # Create ~/.manage-skills/ config
 claude:.claude/skills:SKILL.md
 ```
 
+`~/.manage-skills/notes.md` — optional free-form Markdown, appended to `locations`.
+
 ## Workflow
 
 ```bash
-# Set up sources once
-manage-skills sources add ~/dev/shared-skills
-manage-skills sources add ~/dev/perl/shared-skills
+# Set up sources once, with a label saying what each one holds
+manage-skills sources add ~/dev/shared-skills Cross-language: K8s, CI, tools
+manage-skills sources add ~/dev/perl/shared-skills Shared Perl ecosystem
 
-# In any project: link what you need
+# In any project: see what exists, then link what you need
 cd ~/dev/my-project
+manage-skills locations
 manage-skills link perl-moo dbio-core container-kubernetes
 
 # After git clone: re-establish hardlinks
@@ -110,3 +155,22 @@ ln OLD_PATH NEW_PATH
 # Verify all paths now share one inode with full linkcount:
 stat -c '%i %h %n' <all paths>
 ```
+
+### Split inodes elsewhere — the standing rule
+
+The repair above fixes one break you caused. The same state arises silently: a copy that
+was never linked, or one written by a rename-and-replace tool months ago. Two paths hold
+the same bytes and nobody notices until one side is edited and the other keeps the stale
+content.
+
+**When you find files that belong to one shared chain and are byte-identical but sit on
+different inodes, link them. No need to ask** — identical content means the link cannot
+lose anything.
+
+```bash
+rm STRAY_PATH && ln CANONICAL_PATH STRAY_PATH
+```
+
+Differing content is a different problem: that is drift, and linking would destroy one
+side. Finding split inodes across a whole machine, and deciding what to do when the
+content differs, is skill `manage-skills-drift-triage`.
