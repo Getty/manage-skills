@@ -248,6 +248,70 @@ assert_exit 0 "check accepts --target" "$MANAGE_SKILLS" check --target claude
 assert_exit 1 "unknown target fails" "$MANAGE_SKILLS" list --target bogus
 
 echo ""
+echo "Remote sources"
+# A local repo over file:// exercises the whole path without a network.
+UPSTREAM="$TMPDIR_BASE/upstream"
+mkdir -p "$UPSTREAM/skills/remote-skill"
+echo "# Remote v1" > "$UPSTREAM/skills/remote-skill/SKILL.md"
+git -C "$UPSTREAM" init -q -b main
+git -C "$UPSTREAM" add -A
+git -C "$UPSTREAM" -c user.email=t@example.com -c user.name=Test commit -qm init
+
+REMOTE_PROJECT="$TMPDIR_BASE/remote-project"
+mkdir -p "$REMOTE_PROJECT"
+cd "$REMOTE_PROJECT"
+
+assert_exit 0 "sources add clones a remote" "$MANAGE_SKILLS" sources add "file://$UPSTREAM" Remote test
+assert_output_contains "remote-skill" "remote skill is discoverable" "$MANAGE_SKILLS" list
+assert_exit 0 "link from a remote source" "$MANAGE_SKILLS" link remote-skill
+
+LIVE="$MANAGE_SKILLS_HOME/sources.d/upstream/remote-skill/SKILL.md"
+LINKED="$REMOTE_PROJECT/.claude/skills/remote-skill/SKILL.md"
+if [ "$(inode "$LIVE")" = "$(inode "$LINKED")" ]; then
+  pass "remote skill hardlinks into the project"
+else
+  fail "remote skill hardlinks into the project"
+fi
+INODE_BEFORE=$(inode "$LINKED")
+
+# Upstream moves on.
+echo "# Remote v2" > "$UPSTREAM/skills/remote-skill/SKILL.md"
+mkdir -p "$UPSTREAM/skills/second-skill"
+echo "# Second" > "$UPSTREAM/skills/second-skill/SKILL.md"
+git -C "$UPSTREAM" add -A
+git -C "$UPSTREAM" -c user.email=t@example.com -c user.name=Test commit -qm v2
+
+assert_output_contains "behind" "update --check reports pending commits" "$MANAGE_SKILLS" update --check
+# --check must not change anything.
+if grep -q "Remote v1" "$LINKED"; then
+  pass "update --check leaves files alone"
+else
+  fail "update --check leaves files alone"
+fi
+
+assert_exit 0 "update pulls the remote" "$MANAGE_SKILLS" update
+
+# The point of the whole design: the project was never touched, yet it has the
+# new content, because the file was rewritten in place and the inode held.
+if grep -q "Remote v2" "$LINKED"; then
+  pass "update reaches the linked project without a sync"
+else
+  fail "update reaches the linked project without a sync" "$(cat "$LINKED")"
+fi
+if [ "$(inode "$LINKED")" = "$INODE_BEFORE" ]; then
+  pass "update keeps the inode"
+else
+  fail "update keeps the inode" "was $INODE_BEFORE, now $(inode "$LINKED")"
+fi
+assert_output_contains "second-skill" "new upstream skill appears" "$MANAGE_SKILLS" list
+assert_exit 0 "check stays clean after an update" "$MANAGE_SKILLS" check
+assert_output_contains "up to date" "update is idempotent" "$MANAGE_SKILLS" update
+assert_exit 1 "update on an unknown source fails" "$MANAGE_SKILLS" update no-such-source
+
+"$MANAGE_SKILLS" sources remove "file://$UPSTREAM" >/dev/null 2>&1
+cd "$PROJECT_DIR"
+
+echo ""
 echo "Self"
 assert_exit 0 "self status exits cleanly" "$MANAGE_SKILLS" self
 assert_output_contains "manage-skills" "self status names the script" "$MANAGE_SKILLS" self

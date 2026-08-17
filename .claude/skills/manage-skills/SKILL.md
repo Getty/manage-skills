@@ -22,9 +22,10 @@ manage-skills locations              # Where skills come from, per source
 manage-skills link <skill>...        # Hardlink skills into current project
 manage-skills unlink <skill>...      # Remove skills from current project
 manage-skills sync                   # Re-hardlink stale copies
+manage-skills update [name...]       # Pull remote sources (--check only reports)
 manage-skills check                  # Verify hardlink integrity
 manage-skills sources                # List source directories
-manage-skills sources add <dir> [label]  # Add a skill source
+manage-skills sources add <dir|repo> [label]  # Add a source, local or remote
 manage-skills sources remove <dir>   # Remove a skill source
 manage-skills targets                # List configured targets
 manage-skills targets add <n> <p> <f> # Add target (name:path:file)
@@ -73,15 +74,35 @@ on `PATH` and loads both skills:
 /plugin install manage-skills@getty
 ```
 
+## Remote sources
+
+A source can be a repository instead of a directory:
+
+```bash
+manage-skills sources add github:Getty/perl-skills Shared Perl ecosystem
+manage-skills update --check   # anything new upstream?
+manage-skills update           # fetch it
+```
+
+`update` writes changed files **in place**, so the inode survives and every project
+already linked to that skill has the new content the moment it finishes. Never run a
+per-project `sync` after an update — there is nothing to fix. A skill that disappears
+upstream is reported, never deleted, because a project may still be linked to it.
+
+Stored in two places on purpose: `~/.manage-skills/cache/<name>/` is the git checkout,
+`~/.manage-skills/sources.d/<name>/` holds the files that get hardlinked. Pulling
+straight into the linked copy would rename-and-replace and strand every hardlink — the
+drift this tool exists to prevent.
+
 ## Config
 
 `~/.manage-skills/sources` — one source directory per line, in priority order (first
 match wins). A trailing `# label` describes the source and shows up in `locations`:
 
 ```
-~/dev/shared-skills        # Cross-language: K8s, CI, GPU, tools
-~/dev/perl/shared-skills   # Shared Perl ecosystem
-~/dev/perl/dbio-dev/.claude/skills   # DBIO ORM, per-repo sources
+~/dev/shared-skills          # Cross-language: K8s, CI, GPU, tools
+~/dev/perl/shared-skills     # Shared Perl ecosystem
+github:Getty/perl-skills     # Remote — fetched with `manage-skills update`
 ```
 
 `~/.manage-skills/targets` — format `name:path:file`:
