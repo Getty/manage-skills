@@ -95,9 +95,10 @@ manage-skills                         # …or pick interactively
 | `manage-skills link <skill>…` | Hardlink skills into the current project |
 | `manage-skills unlink <skill>…` | Remove skills from the current project |
 | `manage-skills sync` | Re-hardlink any skill that became a plain copy |
+| `manage-skills update [name…]` | Pull remote sources; `--check` only reports |
 | `manage-skills check` | Verify hardlink integrity |
 | `manage-skills sources` | List source directories |
-| `manage-skills sources add <dir> [label]` | Add a source, with an optional label |
+| `manage-skills sources add <dir\|repo> [label]` | Add a source — a directory or a git repo |
 | `manage-skills sources remove <dir>` | Remove a source |
 | `manage-skills targets` | List configured targets |
 | `manage-skills self` | Where this install and its own skills live |
@@ -141,6 +142,37 @@ name appears in two sources, the first one wins.
 - **In Git**: a normal file, committed like any other
 - **For teammates**: an independent copy on clone; `manage-skills sync` relinks it to
   their own sources
+
+### Remote sources
+
+A source doesn't have to be a directory on your machine. Point it at a repository and
+manage-skills keeps a copy for you:
+
+```bash
+manage-skills sources add github:Getty/perl-skills Shared Perl ecosystem
+manage-skills link perl-moo perl-mcp
+
+manage-skills update --check   # anything new upstream?
+manage-skills update           # fetch it
+```
+
+No Claude Code required — this is bash and git. Skills from a remote source hardlink into
+your projects exactly like local ones, get committed with the repo, and reach teammates
+on clone.
+
+**Updates land everywhere at once.** `update` writes changed files *in place*, so the
+inode survives and every project already linked to that skill has the new content the
+moment `update` finishes. There is nothing to run in each project afterwards:
+
+```
+$ manage-skills update
+github:Getty/perl-skills
+  2 updated, 1 new
+```
+
+A skill that disappears upstream is reported, never deleted — a project may still be
+linked to it. Where the repo keeps its skills (`skills/`, `.claude/skills/`, or the root)
+is detected, not configured.
 
 ### Where skills live
 
@@ -223,6 +255,10 @@ claude:.claude/skills:SKILL.md
 
 **`notes.md`** — optional free-form Markdown, printed at the end of `locations`.
 
+Remote sources add two directories: `cache/<name>/` is the git checkout, `sources.d/<name>/`
+holds the files your projects hardlink against. Keeping them apart is what lets an update
+reach every project at once — see the FAQ below.
+
 ## FAQ
 
 **Why hardlinks instead of symlinks?**
@@ -245,6 +281,13 @@ No. Hardlinks need one filesystem, so sources and projects must be on the same m
 Check `manage-skills locations` for a `*` next to its name — an earlier source is
 shadowing it. Reorder `~/.manage-skills/sources`.
 
+**Why does a remote source get stored twice?**
+`git pull` writes changed files by rename-and-replace, which mints a new inode and leaves
+every hardlink pointing at the old content — the exact drift this tool exists to prevent.
+So the checkout stays separate, and `update` copies changed files into the linked copy
+with `cat >`, which writes in place. The inode survives, and every project linked to that
+skill is up to date the instant `update` returns.
+
 **Can I use this with tools other than Claude Code?**
 Yes. `manage-skills targets add cursor .cursor/rules RULE.md`. The file format differs
 per tool, the hardlink mechanics don't.
@@ -258,6 +301,7 @@ project on the old content. The shipped `manage-skills` skill has the full rules
 
 - Bash 3.2+ — runs on the system bash macOS ships
 - Standard Unix tools: `stat`, `ln`, `find`, `grep`
+- `git` — only for remote sources
 - Optional: `fzf` for interactive mode, `tput` for column width detection
 
 ## License

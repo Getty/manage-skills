@@ -45,6 +45,10 @@ C-style `for ((…))` carry everything here; `declare -A`, `mapfile`, and `reada
 4.x-only. `&>` is fine — 3.2 has it, and the script and installer both use it. Verify
 against `/bin/bash` and a Homebrew bash 5.x.
 
+**`local a=$1 b=$a` breaks under `set -u`.** Bash declares every name in a `local`
+statement first and assigns afterwards, so the second reads an unset variable and the
+script dies. Split them onto separate `local` lines when one derives from another.
+
 **`stat` argument order matters**: `stat -c %i` first, `stat -f %i` as the fallback.
 Reversed, GNU reads `%i` as a filename, prints filesystem info to stdout and exits 1 —
 the fallback then appends the real inode to that garbage and every comparison fails.
@@ -60,6 +64,28 @@ never from the rendered string.
 **Every listing has two modes**: columns on a terminal (`[[ -t 1 ]]`), one record per
 line when piped. Keep the piped shape stable — `grep`/`awk` pipelines and the smoke
 tests read it.
+
+## Remote sources
+
+A remote source is stored twice, and that is the whole point:
+
+- `cache/<name>/` — the git checkout, pure transport.
+- `sources.d/<name>/` — the files projects hardlink against.
+
+`update` pulls the cache, then copies changed files across with `cat >`, which truncates
+in place and keeps the inode. Every project linked to that file therefore has the new
+content the moment `update` finishes — no per-project `sync`, no registry of which
+projects use which source. Pulling straight into the linked copy would rename-and-replace
+and strand every hardlink on the old content, which is precisely the drift this tool
+exists to prevent.
+
+Two consequences worth preserving: files that vanish upstream are reported, never
+deleted, because a project may still hold a hardlink to one; and `remote_behind` compares
+`HEAD` against the already-fetched upstream ref, so `list` and `locations` can show
+"updates available" without a network round-trip. Fetching belongs to `update`.
+
+The skill directory inside a checkout is detected (`skills/`, `.claude/skills/`, root),
+not configured — asking a user which layout a repo uses is asking them to go look.
 
 ## Config
 
