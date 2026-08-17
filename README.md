@@ -1,26 +1,60 @@
 # manage-skills
 
-Hardlink-based skill sharing across AI coding tool projects.
+**Hardlink-based skill sharing across AI coding tool projects.**
 
-You write a skill once. Every project that needs it gets a hardlink. Edit in one place, all projects stay in sync. Git sees a normal file, so your team gets the skill when they clone.
+Write a skill once. Every project that needs it gets a hardlink. Edit in one place and
+all of them change. Git sees a normal file, so your team gets the skill when they clone.
+
+```
+~/dev/shared-skills  — Cross-language: K8s, CI, tools
+  [ ] ansible-basics        [~] github-cli            [ ] prometheus-metrics
+  [*] cilium                [ ] gpu-nvidia            [*] rke2
+  [ ] container-kubernetes  [ ] grafana-dashboards    [ ] terraform-core
+
+~/dev/perl/shared-skills  — Shared Perl ecosystem
+  [ ] perl-ai-langertha     [ ] perl-mcp              [*] perl-moo
+
+This project (source of truth)
+   ● my-orm-core
+
+Legend: [*] hardlinked  [~] local copy  [ ] available  ● original
+```
 
 ## The Problem
 
-AI coding tools like Claude Code use skill files (`.claude/skills/SKILL.md`) to give the model domain knowledge. As your skill library grows, you end up with the same files copied across dozens of projects. They drift apart. Updates don't propagate. You forget which version is current.
+AI coding tools use skill files (`.claude/skills/SKILL.md`) to give the model domain
+knowledge. As your library grows you end up with the same file copied across dozens of
+projects. They drift apart, updates don't propagate, and nobody knows which copy is
+current.
 
 ## The Solution
 
-**manage-skills** introduces a simple convention:
+1. Each skill has exactly **one source of truth** — the project that owns it, or a
+   shared directory.
+2. Every other project gets a **hardlink** to that source.
+3. One CLI manages the links.
 
-1. Each skill has exactly **one source of truth** (the project that owns it, or a shared directory)
-2. Other projects get **hardlinks** to that source
-3. A single CLI manages the links
-
-Hardlinks are the key insight: they're committable (Git sees a regular file), they stay in sync on your machine (same inode), and your teammates get an independent copy when they clone (no broken symlinks pointing to paths that don't exist on their machine).
+Hardlinks are the trick. They're committable (Git sees a regular file), they stay in
+sync on your machine (same inode), and teammates get an independent copy on clone — no
+broken symlink pointing at `/home/yourname/dev/…`.
 
 ## Install
 
-**From a clone (dev mode — symlinks the script so edits are live):**
+**As a Claude Code plugin** — puts `manage-skills` on the Bash tool's `PATH` and brings
+its skills along, so Claude knows how to use it:
+
+```
+/plugin marketplace add Getty/manage-skills
+/plugin install manage-skills@getty-manage-skills
+```
+
+**Homebrew:**
+
+```bash
+brew install Getty/manage-skills/manage-skills
+```
+
+**From a clone** (dev mode — symlinks the script so your edits are live):
 
 ```bash
 git clone https://github.com/Getty/manage-skills.git
@@ -28,7 +62,7 @@ cd manage-skills
 ./install.sh
 ```
 
-**One-liner (downloads a copy):**
+**One-liner** (downloads a standalone copy):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Getty/manage-skills/main/install.sh | bash
@@ -37,171 +71,194 @@ curl -fsSL https://raw.githubusercontent.com/Getty/manage-skills/main/install.sh
 ## Quick Start
 
 ```bash
-# 1. Initialize config
-manage-skills init
+manage-skills init                    # create ~/.manage-skills/
 
-# 2. Add your skill source directories
-manage-skills sources add ~/dev/shared-skills
-manage-skills sources add ~/dev/perl/shared-skills
-manage-skills sources add ~/dev/myframework/.claude/skills
+# Register where your skills live. The trailing label is optional and shows up
+# in `locations`.
+manage-skills sources add ~/dev/shared-skills      Cross-language: K8s, CI, tools
+manage-skills sources add ~/dev/perl/shared-skills Shared Perl ecosystem
+manage-skills self install                         # the skills this tool ships
 
-# 3. Go to a project and see what's available
 cd ~/dev/my-project
-manage-skills list
-
-# 4. Link skills you need
-manage-skills link perl-moo dbio-core container-kubernetes
-
-# 5. Or use interactive mode
-manage-skills
-```
-
-## How It Works
-
-### Source Directories
-
-A source directory contains skill subdirectories, each with a `SKILL.md`:
-
-```
-~/dev/shared-skills/
-  container-kubernetes/
-    SKILL.md
-  github-cli/
-    SKILL.md
-  kubernetes-concepts/
-    SKILL.md
-```
-
-Sources are registered in `~/.manage-skills/sources` (one path per line). Order matters: when a skill name appears in multiple sources, the first one wins.
-
-### Hardlinking
-
-When you run `manage-skills link perl-moo`, it:
-
-1. Finds `perl-moo/SKILL.md` in your configured sources
-2. Creates `.claude/skills/perl-moo/` in the current project
-3. Creates a hardlink: `ln source/perl-moo/SKILL.md .claude/skills/perl-moo/SKILL.md`
-
-The result:
-- **On your machine**: editing either copy changes both (same inode)
-- **In Git**: it's a normal file, committed like any other
-- **For teammates**: they get an independent copy when they clone
-
-### Targets
-
-By default, manage-skills targets Claude Code (`.claude/skills/SKILL.md`). The target system is extensible for other AI tools:
-
-```bash
-# Default target
-manage-skills targets list
-# claude  →  .claude/skills/SKILL.md
-
-# Add another target (future use)
-manage-skills targets add cursor .cursor/rules RULE.md
+manage-skills locations               # where does everything come from?
+manage-skills link perl-moo dbio-core # link what you need
+manage-skills                         # …or pick interactively
 ```
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `manage-skills` | Interactive mode (fzf if available, otherwise numbered menu) |
-| `manage-skills list` | Show all skills with status |
-| `manage-skills link <skill>...` | Hardlink skills into current project |
-| `manage-skills unlink <skill>...` | Remove skills from current project |
-| `manage-skills sync` | Re-hardlink any skills that became copies |
+| `manage-skills` | Interactive mode — fzf if available, otherwise a numbered menu |
+| `manage-skills list` | All skills with their link status, grouped by source |
+| `manage-skills locations` | Where skills come from, per source |
+| `manage-skills link <skill>…` | Hardlink skills into the current project |
+| `manage-skills unlink <skill>…` | Remove skills from the current project |
+| `manage-skills sync` | Re-hardlink any skill that became a plain copy |
 | `manage-skills check` | Verify hardlink integrity |
-| `manage-skills sources` | List configured source directories |
-| `manage-skills sources add <dir>` | Add a source directory |
-| `manage-skills sources remove <dir>` | Remove a source directory |
+| `manage-skills sources` | List source directories |
+| `manage-skills sources add <dir> [label]` | Add a source, with an optional label |
+| `manage-skills sources remove <dir>` | Remove a source |
 | `manage-skills targets` | List configured targets |
-| `manage-skills init` | Create `~/.manage-skills/` config |
+| `manage-skills self` | Where this install and its own skills live |
+| `manage-skills self install` | Register the shipped skills as a source |
+| `manage-skills self update` | Update the script and the shipped skills |
+| `manage-skills init` | Create `~/.manage-skills/` |
+
+Every command takes `--target <name>` (default: `claude`).
 
 ### Status Icons
 
 | Icon | Meaning |
 |---|---|
-| `[*]` | Hardlinked from source (in sync) |
-| `[~]` | Local copy exists but is not a hardlink (drifted) |
-| `[ ]` | Available in sources but not in this project |
+| `[*]` | Hardlinked from source — in sync |
+| `[~]` | A local copy exists but is not a hardlink — drifted |
+| `[ ]` | Available in a source, not in this project |
 | `●` | Original — this project is the source of truth |
 
-## Organizing Your Skills
+## How It Works
 
-A skill naming convention helps AI models find the right skill:
+### Source directories
+
+A source directory holds skill subdirectories, each with a `SKILL.md`:
+
+```
+~/dev/shared-skills/
+  container-kubernetes/SKILL.md
+  github-cli/SKILL.md
+  cilium/SKILL.md
+```
+
+Sources are listed in `~/.manage-skills/sources`, **in priority order** — when a skill
+name appears in two sources, the first one wins.
+
+### Hardlinking
+
+`manage-skills link perl-moo` finds `perl-moo/SKILL.md` in your sources, creates
+`.claude/skills/perl-moo/` in the current project, and hardlinks the file into it.
+
+- **On your machine**: editing either path changes both — same inode
+- **In Git**: a normal file, committed like any other
+- **For teammates**: an independent copy on clone; `manage-skills sync` relinks it to
+  their own sources
+
+### Where skills live
+
+`manage-skills locations` answers "where does this come from?" from config and disk, so
+there is no inventory to keep up to date:
+
+```
+~/dev/shared-skills  — Cross-language: K8s, CI, tools
+  cilium                container-kubernetes  github-cli
+  gpu-nvidia            rke2                  vast-ai
+
+~/dev/perl/shared-skills  — Shared Perl ecosystem
+  cilium*                perl-mcp              perl-moo
+
+Owned by my-orm (source of truth — no source provides these)
+  my-orm-core           my-orm-migrations
+
+* shadowed — an earlier source already provides that name, so this
+  copy never wins a link or a sync.
+```
+
+That `*` is the one worth watching. A second source offering a name an earlier source
+already provides is never linked and never synced — the usual reason a project's copy
+quietly stops updating.
+
+Whatever can't be derived — naming conventions, which skills pair up, which ones are
+conditional — goes in `~/.manage-skills/notes.md`, which `locations` prints at the end.
+
+### Column layout
+
+On a terminal, `list` and `locations` size their columns to your terminal width. Piped
+or redirected output falls back to one skill per line, so `manage-skills list | grep …`
+keeps working.
+
+### Targets
+
+By default manage-skills targets Claude Code (`.claude/skills/SKILL.md`). The target
+system is extensible:
+
+```bash
+manage-skills targets list
+# claude  →  .claude/skills/SKILL.md
+
+manage-skills targets add cursor .cursor/rules RULE.md
+manage-skills list --target cursor
+```
+
+## Naming Skills
+
+A convention helps the model pick the right skill:
 
 | Pattern | Example | Why |
 |---|---|---|
-| `{lang}-{name}` | `perl-moo`, `python-django` | Language prefix for language-specific skills |
+| `{lang}-{name}` | `perl-moo`, `python-django` | Language prefix keeps ecosystems apart |
 | `{lang}-ai-{name}` | `perl-ai-langertha` | AI/LLM frameworks don't get lost |
-| `{tool}-cli` | `vast-ai-cli` | Distinguishes CLI from API skill |
-| Full words | `kubernetes` not `k8s` | Better token matching for the model |
-| `{project}-{topic}` | `hi-core`, `hi-database` | Project-specific skills |
+| `{tool}-cli` | `vast-ai-cli` | Distinguishes the CLI skill from the API one |
+| Full words | `kubernetes`, not `k8s` | Better token matching for the model |
+| `{project}-{topic}` | `my-orm-core` | Project-owned skills read as their own thing |
 
-### Example Layout
-
-```
-~/dev/shared-skills/              # Cross-language (K8s, CI, tools)
-  container-kubernetes/
-  github-cli/
-  cilium/
-
-~/dev/perl/shared-skills/         # Shared Perl ecosystem
-  perl-moo/
-  perl-mcp/
-  perl-dzil-distini/
-
-~/dev/perl/my-orm/.claude/skills/ # Project owns its skills
-  my-orm-core/                    # Original — source of truth
-  perl-moo/                       # Hardlink from shared-skills
-
-~/dev/hugo/shared-skills/         # Hugo ecosystem
-  hugo-static-site-generator/
-  hugo-ci-sites/
-```
+Record your own conventions in `~/.manage-skills/notes.md` so `locations` shows them.
 
 ## Config Files
 
-All config lives in `~/.manage-skills/`:
+Everything lives in `~/.manage-skills/` (override with `MANAGE_SKILLS_HOME`).
 
-**`sources`** — One source directory per line. `~` is expanded. Comments with `#`.
+**`sources`** — one directory per line, in priority order. `~` is expanded. A full-line
+`#` is a comment; a trailing `#` is that source's label.
 
 ```
-# Cross-language
-~/dev/shared-skills
-
-# Perl ecosystem
-~/dev/perl/shared-skills
-~/dev/perl/dbio-dev/.claude/skills
+~/dev/shared-skills                  # Cross-language: K8s, CI, tools
+~/dev/perl/shared-skills             # Perl ecosystem
+~/dev/perl/dbio-dev/.claude/skills   # DBIO ORM, per-repo sources
 ```
 
-**`targets`** — Format: `name:path:file`
+**`targets`** — `name:path:file`.
 
 ```
 claude:.claude/skills:SKILL.md
 ```
 
+**`notes.md`** — optional free-form Markdown, printed at the end of `locations`.
+
 ## FAQ
 
 **Why hardlinks instead of symlinks?**
-Symlinks contain an absolute path. When someone clones your repo, the symlink points to `/home/yourname/dev/...` which doesn't exist on their machine. Hardlinks are just regular files from Git's perspective — everyone gets an independent copy.
+A symlink stores a path. Clone the repo on another machine and it points at
+`/home/yourname/dev/…`, which isn't there. A hardlink is just a regular file to Git —
+everyone gets a working independent copy.
 
 **What happens when I `git clone` a project with hardlinked skills?**
-You get normal independent files. Run `manage-skills sync` to re-establish hardlinks to your local sources (if you have them).
+You get normal files. `manage-skills sync` re-establishes hardlinks against your own
+sources, if you have them.
 
-**What if I don't have the source directories?**
-The skills still work — they're regular committed files. You just can't sync updates until you set up the sources.
+**What if I don't have the source directories at all?**
+The skills still work — they're committed files. You just can't sync updates until you
+set up sources.
 
 **Does this work across filesystems?**
-No, hardlinks require the same filesystem. Your source directories and projects must be on the same mount.
+No. Hardlinks need one filesystem, so sources and projects must be on the same mount.
+
+**A skill I added never shows up as linked. Why?**
+Check `manage-skills locations` for a `*` next to its name — an earlier source is
+shadowing it. Reorder `~/.manage-skills/sources`.
 
 **Can I use this with tools other than Claude Code?**
-Yes. Add a target: `manage-skills targets add cursor .cursor/rules RULE.md`. The skill file format may differ, but the hardlink mechanics are the same.
+Yes. `manage-skills targets add cursor .cursor/rules RULE.md`. The file format differs
+per tool, the hardlink mechanics don't.
+
+**How do I edit a skill without breaking every other copy?**
+Use `cat > file` or `cp new old`. Anything that saves by rename-and-replace — including
+most editors' "atomic save" — mints a new inode and silently strands every other
+project on the old content. The shipped `manage-skills` skill has the full rules.
 
 ## Requirements
 
-- Bash 4+ (for associative arrays)
+- Bash 3.2+ — runs on the system bash macOS ships
 - Standard Unix tools: `stat`, `ln`, `find`, `grep`
-- Optional: `fzf` for interactive mode
+- Optional: `fzf` for interactive mode, `tput` for column width detection
 
 ## License
 
