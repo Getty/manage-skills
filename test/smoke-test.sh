@@ -334,6 +334,55 @@ esac
 "$MANAGE_SKILLS" sources remove "$REPO_DIR/.claude/skills" >/dev/null 2>&1
 
 echo ""
+echo "Package"
+PKG="$TMPDIR_BASE/publishable"
+mkdir -p "$PKG/skills/shared-thing"
+echo "# Shared" > "$PKG/skills/shared-thing/SKILL.md"
+git -C "$PKG" init -q -b main
+git -C "$PKG" remote add origin git@github.com:Someone/publishable.git
+
+assert_exit 0 "package exits cleanly" "$MANAGE_SKILLS" package "$PKG"
+test -f "$PKG/.claude-plugin/plugin.json" && pass "package writes a manifest" || fail "package writes a manifest"
+assert_output_contains "Someone/publishable" "package derives the repo from the git remote" \
+  "$MANAGE_SKILLS" package "$PKG"
+assert_output_contains "sources add github:Someone/publishable" \
+  "package shows the non-Claude-Code route too" "$MANAGE_SKILLS" package "$PKG"
+if grep -q '"skills": "./skills"' "$PKG/.claude-plugin/plugin.json"; then
+  pass "manifest points at the detected skills dir"
+else
+  fail "manifest points at the detected skills dir" "$(cat "$PKG/.claude-plugin/plugin.json")"
+fi
+
+# An existing manifest is somebody's work — never clobber it silently.
+echo '{"name":"hand-written"}' > "$PKG/.claude-plugin/plugin.json"
+assert_output_contains "leaving it alone" "package keeps an existing manifest" \
+  "$MANAGE_SKILLS" package "$PKG"
+if grep -q "hand-written" "$PKG/.claude-plugin/plugin.json"; then
+  pass "existing manifest survives"
+else
+  fail "existing manifest survives"
+fi
+assert_exit 0 "package --force overwrites" "$MANAGE_SKILLS" package "$PKG" --force
+if grep -q "publishable" "$PKG/.claude-plugin/plugin.json"; then
+  pass "--force rewrites the manifest"
+else
+  fail "--force rewrites the manifest"
+fi
+
+# Layout detection: .claude/skills works the same as skills/.
+PKG2="$TMPDIR_BASE/publishable2"
+mkdir -p "$PKG2/.claude/skills/other-thing"
+echo "# Other" > "$PKG2/.claude/skills/other-thing/SKILL.md"
+assert_exit 0 "package detects .claude/skills" "$MANAGE_SKILLS" package "$PKG2"
+if grep -q '"skills": "./.claude/skills"' "$PKG2/.claude-plugin/plugin.json"; then
+  pass "manifest points at .claude/skills"
+else
+  fail "manifest points at .claude/skills" "$(cat "$PKG2/.claude-plugin/plugin.json")"
+fi
+
+assert_exit 1 "package fails on a directory with no skills" "$MANAGE_SKILLS" package "$TMPDIR_BASE"
+
+echo ""
 echo "Packaging consistency"
 # The version lives in the script and the plugin manifest; the release
 # workflow bumps both.

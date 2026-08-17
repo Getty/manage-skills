@@ -87,6 +87,19 @@ deleted, because a project may still hold a hardlink to one; and `remote_behind`
 The skill directory inside a checkout is detected (`skills/`, `.claude/skills/`, root),
 not configured — asking a user which layout a repo uses is asking them to go look.
 
+## Two routes, one set of files
+
+A skill directory can serve both audiences at once, and `package` sets that up:
+`.claude-plugin/plugin.json` with a `skills` path pointing at wherever the directories
+already sit. Nothing is copied into a `skills/` folder, and the same repo works as a
+manage-skills remote source.
+
+Which route fits whom is the thing to keep straight when touching this code. A plugin
+install is one line and needs no new tooling, so it wins for someone who just wants the
+skills on their machine. A hardlink puts the skill *in the repo*, so it reaches teammates
+on clone, can be chosen per project, and works outside Claude Code. Neither replaces the
+other, and `package` never picks for the user — it prints both.
+
 ## Config
 
 `~/.manage-skills/` holds `sources`, `targets`, and an optional `notes.md`.
