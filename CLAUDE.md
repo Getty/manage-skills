@@ -139,7 +139,7 @@ The repo is two things at once, from one set of files:
   kind is exactly what this tool exists to avoid.
 
 Distribution goes through the shared catalog at
-[Getty/claude-code](https://github.com/Getty/claude-code), which lists this repo as a
+[Getty/marketplace](https://github.com/Getty/marketplace), which lists this repo as a
 github source. This repo carries no `marketplace.json` of its own — one catalog for every
 plugin, so users register a single marketplace.
 

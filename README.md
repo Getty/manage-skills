@@ -44,7 +44,7 @@ broken symlink pointing at `/home/yourname/dev/…`.
 its skills along, so Claude knows how to use it:
 
 ```
-/plugin marketplace add Getty/claude-code
+/plugin marketplace add Getty/marketplace
 /plugin install manage-skills@getty
 ```
 
