@@ -72,9 +72,11 @@ jobs:
           # The smoke tests fail if they diverge.
           sed -i.bak "s/^VERSION=\".*\"$/VERSION=\"${NEW_VERSION}\"/" manage-skills
           sed -i.bak "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" .claude-plugin/plugin.json
+          sed -i.bak "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" .codex-plugin/plugin.json
           rm -f manage-skills.bak .claude-plugin/*.bak
           grep -q "^VERSION=\"${NEW_VERSION}\"$" manage-skills
           grep -q "\"version\": \"${NEW_VERSION}\"" .claude-plugin/plugin.json
+          grep -q "\"version\": \"${NEW_VERSION}\"" .codex-plugin/plugin.json
 
           if git diff --quiet; then
             echo "VERSION already in sync, nothing to commit"
