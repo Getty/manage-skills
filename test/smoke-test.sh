@@ -405,7 +405,79 @@ else
   fail "manifest points at .claude/skills" "$(cat "$PKG2/.claude-plugin/plugin.json")"
 fi
 
+# A skill set that groups its skills one directory deeper — Getty/skills/perl/…,
+# mattpocock/skills/engineering/… — is the ordinary shape for a monorepo of
+# skills. The groups are organisation in the source repo only: a project links
+# skills by name, so manage-skills flattens them into one level.
+PKG3="$TMPDIR_BASE/grouped"
+mkdir -p "$PKG3/perl/perl-core" "$PKG3/perl/perl-moose" "$PKG3/bash/bash-strict"
+echo "# core" > "$PKG3/perl/perl-core/SKILL.md"
+echo "# moose" > "$PKG3/perl/perl-moose/SKILL.md"
+echo "# strict" > "$PKG3/bash/bash-strict/SKILL.md"
+assert_exit 0 "package finds skills grouped one level deeper" "$MANAGE_SKILLS" package "$PKG3"
+assert_output_contains "perl-core" "grouped: names a skill from the first group" \
+  "$MANAGE_SKILLS" package "$PKG3" --force
+assert_output_contains "bash-strict" "grouped: reaches every group" \
+  "$MANAGE_SKILLS" package "$PKG3" --force
+
+# The manifest paths have to be clean: a "././perl/perl-core" is valid JSON and
+# a broken path.
+if grep -q '"\./perl/perl-core"' "$PKG3/.claude-plugin/plugin.json"; then
+  pass "grouped: manifest paths are normalised"
+else
+  fail "grouped: manifest paths are normalised" "$(grep skills "$PKG3/.claude-plugin/plugin.json")"
+fi
+
+# Two groups may not offer the same skill name: the copy in sources.d/ is flat,
+# so one would silently overwrite the other.
+PKG4="$TMPDIR_BASE/colliding"
+mkdir -p "$PKG4/perl/core" "$PKG4/bash/core"
+echo "# perl core" > "$PKG4/perl/core/SKILL.md"
+echo "# bash core" > "$PKG4/bash/core/SKILL.md"
+assert_exit 1 "package refuses a name that two groups both provide" "$MANAGE_SKILLS" package "$PKG4"
+assert_output_contains "core" "collision report names the skill" "$MANAGE_SKILLS" package "$PKG4"
+
+# One level deeper, not arbitrarily deep: a SKILL.md buried further down is more
+# likely an example or a fixture than a skill someone meant to publish.
+PKG5="$TMPDIR_BASE/toodeep"
+mkdir -p "$PKG5/a/b/c/skill"
+echo "# x" > "$PKG5/a/b/c/skill/SKILL.md"
+assert_exit 1 "package does not search arbitrarily deep" "$MANAGE_SKILLS" package "$PKG5"
+
 assert_exit 1 "package fails on a directory with no skills" "$MANAGE_SKILLS" package "$TMPDIR_BASE"
+
+# The remote path materialises a checkout into sources.d/ — and that is where a
+# grouped set has to end up flat, because link/list/sync all read that directory.
+if command -v git >/dev/null 2>&1; then
+  GROUPED_REPO="$TMPDIR_BASE/grouped-repo"
+  mkdir -p "$GROUPED_REPO/perl/perl-core" "$GROUPED_REPO/k8s/k8s-basics"
+  echo "# core" > "$GROUPED_REPO/perl/perl-core/SKILL.md"
+  echo "# k8s" > "$GROUPED_REPO/k8s/k8s-basics/SKILL.md"
+  (
+    cd "$GROUPED_REPO"
+    git init -q .
+    git -c user.email=t@example.com -c user.name=Test add -A
+    git -c user.email=t@example.com -c user.name=Test commit -qm "grouped skills"
+  ) >/dev/null 2>&1
+
+  assert_exit 0 "remote source with grouped skills adds cleanly" \
+    "$MANAGE_SKILLS" sources add "file://$GROUPED_REPO"
+  assert_output_contains "perl-core" "grouped remote: list shows a skill from one group" \
+    "$MANAGE_SKILLS" list
+  assert_output_contains "k8s-basics" "grouped remote: list shows the other group too" \
+    "$MANAGE_SKILLS" list
+  if [ -f "$MANAGE_SKILLS_HOME/sources.d/grouped-repo/perl-core/SKILL.md" ] &&
+     [ -f "$MANAGE_SKILLS_HOME/sources.d/grouped-repo/k8s-basics/SKILL.md" ]; then
+    pass "grouped remote: materialises flat into sources.d"
+  else
+    fail "grouped remote: materialises flat into sources.d" \
+      "$(ls "$MANAGE_SKILLS_HOME/sources.d/grouped-repo" 2>&1)"
+  fi
+  assert_exit 0 "grouped remote: a skill from a group links" "$MANAGE_SKILLS" link perl-core
+  "$MANAGE_SKILLS" sources remove "file://$GROUPED_REPO" >/dev/null 2>&1 || true
+else
+  echo "  skip  grouped remote source (git not available)"
+fi
 
 echo ""
 echo "Packaging consistency"
