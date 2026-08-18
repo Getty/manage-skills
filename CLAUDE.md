@@ -158,6 +158,20 @@ The repo is two things at once, from one set of files:
   to the script; the plugin's `bin/` goes on the Bash tool's `PATH`, so installing the
   plugin is enough to get the command. A relative symlink survives a clone — the absolute
   kind is exactly what this tool exists to avoid.
+- **Codex plugin** — `.codex-plugin/plugin.json`, same `skills` path, same version. Both
+  manifests are checked against the script's `VERSION` by the smoke tests, because the
+  release workflow rewrites only the two files it knows about.
+
+  Codex has no `bin` equivalent: its manifest cannot put anything on `PATH`. The script
+  is reached by path instead — it ships in the plugin root, three levels above
+  `.claude/skills/manage-skills/SKILL.md`, and that skill documents the relative call.
+  Codex hands the model the absolute path of each `SKILL.md` in its skill listing, so a
+  relative reference inside the file resolves without any variable expansion.
+
+  Do not solve this with a symlink under `skills/…/scripts/`: Codex drops symlinks when
+  it installs a plugin — verified, it creates the directory and leaves it empty — while
+  ordinary files in the plugin root come across intact and executable. A copy of the
+  script would be worse still, since the two would drift.
 
 Distribution goes through the shared catalog at
 [Getty/marketplace](https://github.com/Getty/marketplace), which lists this repo as a

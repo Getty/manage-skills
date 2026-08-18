@@ -492,6 +492,28 @@ else
        "script=$SCRIPT_VERSION plugin=$PLUGIN_VERSION"
 fi
 
+# This repo ships to Codex as well, from the same skills directory. The release
+# workflow only knows about the two files it rewrites, so a third manifest that
+# drifts out of step would ship a wrong version to half the users.
+test -f "$REPO_DIR/.codex-plugin/plugin.json" \
+  && pass "Codex manifest exists" || fail "Codex manifest exists"
+CODEX_VERSION=$(grep -m1 '"version"' "$REPO_DIR/.codex-plugin/plugin.json" 2>/dev/null | cut -d'"' -f4)
+if [ "$SCRIPT_VERSION" = "$CODEX_VERSION" ]; then
+  pass "version matches between script and Codex manifest"
+else
+  fail "version matches between script and Codex manifest" \
+       "script=$SCRIPT_VERSION codex=$CODEX_VERSION"
+fi
+# `"skills"` also appears in the keyword list, so match the key, not the word.
+CLAUDE_SKILLS_PATH=$(grep -m1 '"skills":' "$REPO_DIR/.claude-plugin/plugin.json" | cut -d'"' -f4)
+CODEX_SKILLS_PATH=$(grep -m1 '"skills":' "$REPO_DIR/.codex-plugin/plugin.json" 2>/dev/null | cut -d'"' -f4)
+if [ "$CLAUDE_SKILLS_PATH" = "$CODEX_SKILLS_PATH" ]; then
+  pass "both manifests point at the same skills directory"
+else
+  fail "both manifests point at the same skills directory" \
+       "claude=$CLAUDE_SKILLS_PATH codex=$CODEX_SKILLS_PATH"
+fi
+
 # SELF_SKILLS is hand-maintained; it must match what .claude/skills actually holds.
 DECLARED=$(grep -m1 '^SELF_SKILLS=' "$MANAGE_SKILLS" | cut -d'"' -f2 | tr ' ' '\n' | sort | tr '\n' ' ')
 ON_DISK=$(for d in "$REPO_DIR"/.claude/skills/*/; do

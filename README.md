@@ -48,6 +48,20 @@ its skills along, so Claude knows how to use it:
 /plugin install manage-skills@getty
 ```
 
+**As a Codex plugin** — same repo, same skills:
+
+```
+codex plugin marketplace add Getty/marketplace
+codex plugin add manage-skills@getty
+```
+
+A Codex plugin manifest cannot put anything on `PATH`, so there the agent calls the
+script by path — it ships in the plugin root, three levels above the skill that
+documents it, and the skill says so. Everything else behaves identically. If you want
+the command in your own shell as well, install it properly with one of the routes below;
+that is worth doing in either harness, since a plugin only ever reaches the agent's
+shell, never yours.
+
 **Homebrew:**
 
 ```bash

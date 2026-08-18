@@ -38,6 +38,27 @@ manage-skills init                   # Create ~/.manage-skills/ config
 
 Every command takes `--target <name>` (default: `claude`).
 
+## If the `manage-skills` command is not found
+
+Installed as a Claude Code plugin, the command is already on the Bash tool's `PATH`.
+Under Codex there is no such mechanism — a plugin manifest there cannot put anything on
+`PATH` — so the script has to be called by path instead. It sits in the root of this
+plugin, three levels above this file:
+
+```bash
+../../../manage-skills list          # relative to this SKILL.md
+```
+
+Resolve that against the absolute path of this file, which the skill listing gives you.
+Everything else in this document works the same; only the invocation differs.
+
+If you want the command available in your own shell too — in either harness — install it
+once and the path juggling stops:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Getty/manage-skills/main/install.sh | sh
+```
+
 ## Status Icons
 
 - `[*]` — hardlinked from source (in sync)
