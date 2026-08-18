@@ -46,7 +46,7 @@ assert_output_contains() {
   shift 2
   local output
   output=$("$@" 2>&1) || true
-  if echo "$output" | grep -qF "$pattern"; then
+  if echo "$output" | grep -qF -- "$pattern"; then
     pass "$desc"
   else
     fail "$desc" "output missing '$pattern'"
@@ -168,9 +168,10 @@ assert_exit 0 "sync exits cleanly" "$MANAGE_SKILLS" sync
 assert_output_contains "relinked" "sync relinks broken copy" "$MANAGE_SKILLS" sync
 
 # After sync, check should be clean
-# Re-break and re-sync to test the actual relink
+# Re-break and re-sync to test the actual relink. The copy is identical to the
+# source here — a diverging one is deliberately left alone now, see below.
 rm "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
-echo "# Test Skill (modified copy)" > "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+cp "$SOURCE_DIR/test-skill/SKILL.md" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
 "$MANAGE_SKILLS" sync >/dev/null 2>&1
 INODE_SRC2=$(inode "$SOURCE_DIR/test-skill/SKILL.md")
 INODE_DST2=$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")
@@ -178,6 +179,35 @@ if [ "$INODE_SRC2" = "$INODE_DST2" ]; then
   pass "sync restores hardlink"
 else
   fail "sync restores hardlink" "src=$INODE_SRC2 dst=$INODE_DST2"
+fi
+
+# A copy whose content still matches the source is the common case — an Edit
+# tool detached the inode without changing a word. Relinking that loses nothing.
+rm "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+cp "$SOURCE_DIR/test-skill/SKILL.md" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+assert_output_contains "relinked" "sync relinks an identical copy" "$MANAGE_SKILLS" sync
+
+# A copy whose content differs is somebody's work. Relinking would delete it, so
+# sync reports it and moves on — still exit 0, because this is not a failure.
+rm "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+echo "# Deliberately adapted for this project" > "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"
+assert_exit 0 "sync exits cleanly when content diverged" "$MANAGE_SKILLS" sync
+assert_output_contains "test-skill" "sync names the diverged skill" "$MANAGE_SKILLS" sync
+assert_output_contains "--force" "sync points at the flag that would overwrite" "$MANAGE_SKILLS" sync
+if grep -q "Deliberately adapted" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"; then
+  pass "sync leaves diverged content alone"
+else
+  fail "sync leaves diverged content alone" "the local edit was overwritten"
+fi
+
+# --force is the deliberate override.
+assert_output_contains "relinked" "sync --force relinks anyway" "$MANAGE_SKILLS" sync --force
+INODE_SRC3=$(inode "$SOURCE_DIR/test-skill/SKILL.md")
+INODE_DST3=$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")
+if [ "$INODE_SRC3" = "$INODE_DST3" ]; then
+  pass "sync --force restores the hardlink"
+else
+  fail "sync --force restores the hardlink" "src=$INODE_SRC3 dst=$INODE_DST3"
 fi
 
 echo ""

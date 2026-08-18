@@ -54,6 +54,22 @@ Reversed, GNU reads `%i` as a filename, prints filesystem info to stdout and exi
 the fallback then appends the real inode to that garbage and every comparison fails.
 That reversal in the smoke test kept the Linux CI red from the very first run.
 
+## Sync is content-aware
+
+`sync` relinks a copy only when it reads exactly like its source. A copy whose content
+differs is reported and kept, because that state has two very different causes: an `Edit`
+that detached the inode without changing a word, and a project that deliberately adapted
+the skill and committed it. Only the first is safe to overwrite, and the file alone
+cannot tell them apart — the commit in the project's history can.
+
+`--force` overrides it. Keep the default non-destructive: a tool that silently deletes
+somebody's committed change while claiming to *fix* something is worse than one that
+leaves a stale link in place.
+
+The flag parser builds an `args` array and must never expand it empty — `"${args[@]}"`
+under `set -u` on bash 3.2 is an unbound variable, which is why the call is guarded by a
+length check rather than expanded directly.
+
 ## Rendering
 
 **Visible width is not string length.** Rendered cells carry ANSI escapes and a

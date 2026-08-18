@@ -30,6 +30,13 @@ that rule does not apply.
   refreshed either, because `sync` only relinks against the winning source.
   `manage-skills locations` marks these with `*`, so this one is now visible without an
   audit.
+- **Someone changed the skill on purpose.** A project needed something different, edited
+  its copy and committed it. This looks identical to the accident above — `[~]`, linkcount
+  1 — but `sync` no longer overwrites it: since v0.8, a copy whose *content* differs is
+  reported as `diverged` and kept, and only `sync --force` relinks it. The commit in that
+  project's history is what tells a deliberate change from an accident, so read it before
+  reaching for `--force`; the question is whether the change belongs upstream, not how to
+  undo it.
 - **A directory that should be a source isn't registered at all** (`~/.claude/skills` is
   the usual one). Project-local copies of those skills have no sync path back to the
   canonical copy, so nothing ever compares them.
