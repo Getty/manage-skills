@@ -358,8 +358,26 @@ policy:
 ```
 
 Both keep `/name` and `$name` working while stopping the agent from reaching for the
-skill on its own. Worth setting on skills that compete with one another — `perl-moose`
-next to `perl-moo` — and leaving off the ones that always apply.
+skill on its own.
+
+Reach for that sparingly, though, because there is a division of labour it can wreck. An
+agent that *delegates* needs the map: names and descriptions of everything available, so
+it knows what exists and which subagent to hand a task to. Hiding skills from it defeats
+the very arrangement it relies on.
+
+The split that works looks like this:
+
+- **The main agent gets the listing** — names and descriptions, the map. It decides and
+  delegates.
+- **Subagents get the content**, preloaded rather than offered. That is what
+  [`briefing`](https://github.com/Getty/briefing) does: the agent wakes up already
+  holding the skills it was declared to need, instead of having to find them.
+- **The real boundary is what you linked into the project.** A skill that isn't there
+  cannot be offered to anyone, and no flag is needed to keep it quiet.
+
+So `disable-model-invocation` earns its place where a skill would actively mislead if the
+main agent reached for it — `perl-moose` in a house that also has Moo projects — and not
+as a general precaution.
 
 ### Where skills live
 
