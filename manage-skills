@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 SELF_REPO="${MANAGE_SKILLS_REPO:-Getty/manage-skills}"
 # Skills this tool ships. Kept in sync with .claude/skills/ by the smoke tests.
 SELF_SKILLS="manage-skills manage-skills-drift-triage"
