@@ -215,6 +215,77 @@ Nothing is duplicated. Claude Code and Codex both read `<name>/SKILL.md`, so one
 directory serves both — only the two manifests differ, and both point at the directories
 where they already are. An existing manifest is never overwritten without `--force`.
 
+### Grouping a large set
+
+Once a set outgrows a handful of skills, the natural move is one repo with groups:
+
+```
+Getty/skills/
+  perl/
+    perl-core/SKILL.md
+    perl-moose/SKILL.md
+  k8s/
+    k8s-basics/SKILL.md
+```
+
+manage-skills finds these. It looks for skill directories in `skills/`, `.claude/skills/`
+or the repo root, and when a candidate holds none directly, it looks one level deeper.
+Not deeper than that: a `SKILL.md` further down is far more likely an example or a test
+fixture than a skill anyone meant to publish.
+
+The groups are organisation in *your* repo and nothing more. A project links skills by
+name and `sources.d/<name>/` is flat, so `perl/perl-core` arrives simply as `perl-core`.
+That also means two groups cannot offer the same name: `perl/core` and `bash/core` would
+collide the moment they are flattened, so it is reported rather than silently resolved.
+
+`package` follows the same shape. A set that lives in one directory gets
+`"skills": "./skills"`; a grouped set gets the array form, which both Claude Code and
+Codex accept:
+
+```json
+"skills": ["./perl/perl-core", "./perl/perl-moose", "./k8s/k8s-basics"]
+```
+
+### Why the three routes are not interchangeable
+
+A plugin installs **everything it ships**. A hardlink installs **what you asked for**.
+That difference matters more than it first looks, because a skill's description is not
+neutral information — it is an offer. Every skill visible to an agent is a suggestion it
+can act on, and eventually it will: a `perl-moose` skill sitting in the list of a project
+that uses Moo gets picked up sooner or later, and nothing in the result says why.
+
+Progressive disclosure keeps the skill's *body* out of the context until it is used, so a
+large set costs almost nothing in tokens. It does not keep the *description* out — and
+the description is the part that steers behaviour.
+
+So for a small, coherent set, where "all or nothing" is also true in substance, a plugin
+is the better route. For a large or mixed one, distributing it as a source and linking
+per project is not merely tidier: it is the only way an agent never sees the skills that
+have no business in this project.
+
+Neither harness fully fixes this after the fact. Claude Code's per-skill visibility
+setting explicitly excludes plugin skills — *"Plugin skills are not affected by
+`skillOverrides`. Manage those through `/plugin` instead."* Codex can disable individual
+skills with `[[skills.config]] enabled = false`, including plugin ones, but that is
+opt-out: the default is visible.
+
+What you *can* ship yourself, in both worlds, is a skill that never volunteers:
+
+```yaml
+# Claude Code — in the SKILL.md frontmatter
+disable-model-invocation: true
+```
+
+```yaml
+# Codex — in agents/openai.yaml beside the skill
+policy:
+  allow_implicit_invocation: false
+```
+
+Both keep `/name` and `$name` working while stopping the agent from reaching for the
+skill on its own. Worth setting on skills that compete with one another — `perl-moose`
+next to `perl-moo` — and leaving off the ones that always apply.
+
 ### Where skills live
 
 `manage-skills locations` answers "where does this come from?" from config and disk, so

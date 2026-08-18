@@ -187,22 +187,94 @@ remote_name() {
   echo "$name"
 }
 
-# Where the skill directories sit inside a checkout. Detected rather than
-# configured: repos put them in skills/, in .claude/skills/, or at the root,
-# and asking the user to know which is asking them to look it up.
-remote_skills_subdir() {
-  local root="$1" target_file="${2:-SKILL.md}" candidate
+# Every skill directory inside a checkout, one per line. Detected rather than
+# configured: repos put their skills in skills/, in .claude/skills/, or at the
+# root, and asking the user to know which is asking them to look it up.
+#
+# A set of any size usually groups its skills one directory deeper —
+# skills/engineering/tdd, perl/perl-core — so when a candidate holds no skills
+# directly, its subdirectories are searched once more. Not deeper than that: a
+# SKILL.md further down is far more likely an example or a test fixture than a
+# skill anyone meant to publish.
+#
+# The groups are organisation in the source repo and nothing more. Projects link
+# skills by name, and sources.d/<name>/ is flat, so the grouping ends here.
+skill_dirs_in() {
+  local root="$1"
+  local target_file="${2:-SKILL.md}"
+  local candidate dir entry group found
+
   for candidate in "skills" ".claude/skills" "."; do
-    local dir="$root/$candidate"
+    # "$root/." would leak a /./ into every path derived from it, and those
+    # paths end up verbatim in a plugin manifest.
+    if [[ "$candidate" == "." ]]; then
+      dir="$root"
+    else
+      dir="$root/$candidate"
+    fi
     [[ -d "$dir" ]] || continue
-    local entry
+
+    found=""
     for entry in "$dir"/*/; do
-      [[ -f "$entry/$target_file" ]] || continue
-      echo "$dir"
-      return 0
+      [[ -f "$entry$target_file" ]] || continue
+      echo "${entry%/}"
+      found=yes
     done
+    [[ -n "$found" ]] && return 0
+
+    for group in "$dir"/*/; do
+      [[ -d "$group" ]] || continue
+      for entry in "$group"*/; do
+        [[ -f "$entry$target_file" ]] || continue
+        echo "${entry%/}"
+        found=yes
+      done
+    done
+    [[ -n "$found" ]] && return 0
   done
+
   return 1
+}
+
+# Two groups offering the same skill name would collide the moment the set is
+# flattened — the second copy overwrites the first, and nothing says so. Report
+# it instead, the way a vanished upstream file is reported rather than deleted.
+assert_unique_skill_names() {
+  local dirs="$1" context="$2"
+  local seen="" dupes="" name d
+
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    name=$(basename "$d")
+    case " $seen " in
+      *" $name "*)
+        case " $dupes " in
+          *" $name "*) ;;
+          *) dupes="$dupes $name" ;;
+        esac
+        ;;
+      *) seen="$seen $name" ;;
+    esac
+  done <<EOF
+$dirs
+EOF
+
+  [[ -z "$dupes" ]] && return 0
+
+  local msg="$context: two groups provide the same skill name:$dupes"
+  while IFS= read -r d; do
+    [[ -n "$d" ]] || continue
+    case " $dupes " in
+      *" $(basename "$d") "*) msg="$msg
+  $d" ;;
+    esac
+  done <<EOF
+$dirs
+EOF
+  die "$msg
+
+Skill names are flat once linked, so a project cannot hold both. Rename one in
+the source repo."
 }
 
 require_git() {
@@ -215,15 +287,19 @@ require_git() {
 remote_materialise() {
   local name="$1" target_file="${2:-SKILL.md}"
   local cache="$CACHE_DIR/$name" live="$SOURCES_DIR/$name"
-  local src_root
-  src_root=$(remote_skills_subdir "$cache" "$target_file") \
+  local skill_dirs
+  skill_dirs=$(skill_dirs_in "$cache" "$target_file") \
     || die "$name: no skills found in the checkout"
+  assert_unique_skill_names "$skill_dirs" "$name"
 
   mkdir -p "$live"
-  local added=0 updated=0 skill_dir skill_name
-  for skill_dir in "$src_root"/*/; do
-    [[ -f "$skill_dir/$target_file" ]] || continue
+  local added=0 updated=0 skill_dir skill_name present=""
+  # A here-doc, not a pipe: a piped `while read` runs in a subshell and the
+  # counters below would never make it back out.
+  while IFS= read -r skill_dir; do
+    [[ -n "$skill_dir" ]] || continue
     skill_name=$(basename "$skill_dir")
+    present="$present $skill_name"
     mkdir -p "$live/$skill_name"
     if [[ -f "$live/$skill_name/$target_file" ]]; then
       if ! cmp -s "$skill_dir/$target_file" "$live/$skill_name/$target_file"; then
@@ -235,13 +311,17 @@ remote_materialise() {
       cp "$skill_dir/$target_file" "$live/$skill_name/$target_file"
       added=$((added + 1))
     fi
-  done
+  done <<EOF
+$skill_dirs
+EOF
 
   local gone=""
   for skill_dir in "$live"/*/; do
     [[ -d "$skill_dir" ]] || continue
     skill_name=$(basename "$skill_dir")
-    [[ -f "$src_root/$skill_name/$target_file" ]] && continue
+    case " $present " in
+      *" $skill_name "*) continue ;;
+    esac
     gone="$gone $skill_name"
   done
 
@@ -789,7 +869,7 @@ git_repo_slug() {
 # Writes one plugin manifest. Returns 0 when it wrote, 1 when it left an
 # existing file alone — an existing manifest is somebody's work.
 write_plugin_manifest() {
-  local path="$1" name="$2" slug="$3" rel="$4" force="$5"
+  local path="$1" name="$2" slug="$3" skills_json="$4" force="$5"
   if [[ -f "$path" ]] && ! $force; then
     warn "Manifest exists, leaving it alone: $(shorten "$path")"
     echo "  ${DIM}re-run with --force to overwrite${RESET}"
@@ -803,7 +883,7 @@ write_plugin_manifest() {
   "version": "0.1.0",
   "homepage": "https://github.com/$slug",
   "repository": "https://github.com/$slug",
-  "skills": "$rel"
+  "skills": $skills_json
 }
 MANIFEST
   info "Wrote $(shorten "$path")"
@@ -824,36 +904,72 @@ cmd_package() {
   [[ -d "$dir" ]] || die "Directory not found: $dir"
   dir=$(cd -P "$dir" && pwd)
 
-  local skills_root
-  skills_root=$(remote_skills_subdir "$dir") \
-    || die "No skills found in $(shorten "$dir") — expected skill directories in ./, skills/ or .claude/skills/"
+  local skill_dirs
+  skill_dirs=$(skill_dirs_in "$dir") \
+    || die "No skills found in $(shorten "$dir") — expected skill directories in ./, skills/ or .claude/skills/, or grouped one level inside those"
+  assert_unique_skill_names "$skill_dirs" "$(shorten "$dir")"
 
-  local names="" count=0 skill_dir skill_name
-  for skill_dir in "$skills_root"/*/; do
-    [[ -f "$skill_dir/SKILL.md" ]] || continue
+  local names="" count=0 skill_dir skill_name parent parents=""
+  while IFS= read -r skill_dir; do
+    [[ -n "$skill_dir" ]] || continue
     skill_name=$(basename "$skill_dir")
     names="$names $skill_name"
     count=$((count + 1))
-  done
-  [[ $count -eq 0 ]] && die "No SKILL.md files under $(shorten "$skills_root")"
+    parent=$(dirname "$skill_dir")
+    case " $parents " in
+      *" $parent "*) ;;
+      *) parents="$parents $parent" ;;
+    esac
+  done <<EOF
+$skill_dirs
+EOF
+  [[ $count -eq 0 ]] && die "No SKILL.md files under $(shorten "$dir")"
 
-  local rel="${skills_root#$dir}"
-  rel=".${rel:-/}"
+  # One directory holding every skill can be named as one path. Grouped sets
+  # cannot, so the manifest lists each skill directory instead — the shape
+  # mattpocock/skills uses, and the only one that survives grouping.
+  local rel skills_json location group_count=0
+  for parent in $parents; do group_count=$((group_count + 1)); done
+  if [[ $group_count -eq 1 ]]; then
+    rel="${parents# }"
+    rel="${rel#$dir}"
+    rel=".${rel:-/}"
+    skills_json="\"$rel\""
+    location="$rel"
+  else
+    local first=yes rel_one
+    skills_json="["
+    while IFS= read -r skill_dir; do
+      [[ -n "$skill_dir" ]] || continue
+      rel_one=".${skill_dir#$dir}"
+      if [[ $first == yes ]]; then
+        skills_json="$skills_json\"$rel_one\""
+        first=no
+      else
+        skills_json="$skills_json, \"$rel_one\""
+      fi
+    done <<EOF
+$skill_dirs
+EOF
+    skills_json="$skills_json]"
+    location="$group_count groups"
+  fi
+
   local plugin_name
   plugin_name=$(basename "$dir")
   local slug
   slug=$(git_repo_slug "$dir" || echo "OWNER/$plugin_name")
 
   echo "${BOLD}Packaging $(shorten "$dir")${RESET}"
-  echo "  ${GREEN}$count skills${RESET} in $rel:$names"
+  echo "  ${GREEN}$count skills${RESET} in $location:$names"
   echo ""
 
   # Claude Code and Codex both lay skills out as <name>/SKILL.md, so one
   # directory serves both. Only the manifests differ.
   local wrote=0
-  write_plugin_manifest "$dir/.claude-plugin/plugin.json" "$plugin_name" "$slug" "$rel" "$force" \
+  write_plugin_manifest "$dir/.claude-plugin/plugin.json" "$plugin_name" "$slug" "$skills_json" "$force" \
     && wrote=$((wrote + 1))
-  write_plugin_manifest "$dir/.codex-plugin/plugin.json" "$plugin_name" "$slug" "$rel" "$force" \
+  write_plugin_manifest "$dir/.codex-plugin/plugin.json" "$plugin_name" "$slug" "$skills_json" "$force" \
     && wrote=$((wrote + 1))
   [[ $wrote -gt 0 ]] && echo "  ${YELLOW}Fill in the description before publishing.${RESET}"
 

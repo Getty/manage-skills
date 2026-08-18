@@ -87,6 +87,27 @@ deleted, because a project may still hold a hardlink to one; and `remote_behind`
 The skill directory inside a checkout is detected (`skills/`, `.claude/skills/`, root),
 not configured — asking a user which layout a repo uses is asking them to go look.
 
+`skill_dirs_in` emits every skill directory, one per line, rather than the one root the
+old `remote_skills_subdir` returned. When a candidate holds no `*/SKILL.md` directly, its
+subdirectories are searched **once** more, which covers the shape a monorepo of skills
+takes (`skills/engineering/tdd`, `perl/perl-core`). Deliberately not recursive: a
+`SKILL.md` further down is far more likely a fixture or an example than something meant
+to be published, and `mattpocock/skills` proves the case — its `in-progress/` group is
+excluded from the shipped manifest on purpose.
+
+Two consequences the callers have to honour. The candidate `.` is normalised to `$root`
+rather than `$root/.`, because that `/./` would otherwise land verbatim in a generated
+plugin manifest. And the loop over the emitted list is fed by a here-doc, never a pipe —
+a piped `while read` runs in a subshell, and `remote_materialise` would lose its
+counters.
+
+Grouping ends at the source. `sources.d/<name>/` is flat because projects link skills by
+name, so two groups offering one name collide; `assert_unique_skill_names` reports that
+instead of letting the second copy overwrite the first. `package` mirrors the same split:
+one directory yields `"skills": "./skills"`, several yield the array form — verified
+against both harnesses, Claude Code by way of `mattpocock/skills` and Codex by installing
+an array-form manifest and reading the skills back out of `codex debug prompt-input`.
+
 ## Three routes, one set of files
 
 Claude Code and Codex both lay skills out as `<name>/SKILL.md`. Only the surroundings
