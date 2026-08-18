@@ -106,7 +106,7 @@ not configured — asking a user which layout a repo uses is asking them to go l
 `skill_dirs_in` emits every skill directory, one per line, rather than the one root the
 old `remote_skills_subdir` returned. When a candidate holds no `*/SKILL.md` directly, its
 subdirectories are searched **once** more, which covers the shape a monorepo of skills
-takes (`skills/engineering/tdd`, `perl/perl-core`). Deliberately not recursive: a
+takes (`skills/engineering/tdd`, `perl/getty-perl-core`). Deliberately not recursive: a
 `SKILL.md` further down is far more likely a fixture or an example than something meant
 to be published, and `mattpocock/skills` proves the case — its `in-progress/` group is
 excluded from the shipped manifest on purpose.

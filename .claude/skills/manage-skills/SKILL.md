@@ -168,7 +168,7 @@ manage-skills sources add ~/dev/perl/shared-skills Shared Perl ecosystem
 # In any project: see what exists, then link what you need
 cd ~/dev/my-project
 manage-skills locations
-manage-skills link perl-moo dbio-core container-kubernetes
+manage-skills link getty-perl-moo dbio-core container-kubernetes
 
 # After git clone: re-establish hardlinks
 manage-skills sync
