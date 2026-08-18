@@ -1,0 +1,20 @@
+{
+  "name": "manage-skills",
+  "description": "Hardlink-based skill sharing across projects — one source of truth per skill, hardlinks everywhere else. Ships the manage-skills CLI and the skills that explain how to drive it.",
+  "version": "0.6.0",
+  "author": {
+    "name": "Torsten Raudssus",
+    "url": "https://github.com/Getty"
+  },
+  "homepage": "https://github.com/Getty/manage-skills",
+  "repository": "https://github.com/Getty/manage-skills",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "hardlinks",
+    "sync",
+    "sharing",
+    "monorepo"
+  ],
+  "skills": "./.claude/skills"
+}
