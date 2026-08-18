@@ -119,11 +119,16 @@ read_sources() {
 # All skills a source directory provides, in glob order, without dedup.
 list_source_skills() {
   local source_dir="$1" target_file="${2:-SKILL.md}"
-  local skill_dir
-  for skill_dir in "$source_dir"/*/; do
-    [[ -f "$skill_dir/$target_file" ]] || continue
-    basename "$skill_dir"
-  done
+  local dirs skill_dir
+  # Same detection as discovery: a source may group its skills one level deep.
+  # Guarded assignment — a source with no skills exits 1 under set -e.
+  dirs=$(skill_dirs_in "$source_dir" "$target_file") || return 0
+  while IFS= read -r skill_dir; do
+    [[ -n "$skill_dir" ]] || continue
+    echo "${skill_dir##*/}"
+  done <<EOF
+$dirs
+EOF
 }
 
 read_targets() {
@@ -348,18 +353,29 @@ remote_behind() {
 
 # Find all skills across all sources. Output: source_dir:skill_name
 # Deduplicates by skill name — first source wins (so order in sources file matters).
+#
+# Goes through skill_dirs_in, so a local source may group its skills one level
+# deep just like a checkout may. The emitted source_dir is the skill's direct
+# parent — for a grouped source that is the group directory — so every caller's
+# $source_dir/$skill_name still resolves to the real path.
 discover_skills() {
   local target_file="${1:-SKILL.md}"
-  local seen=""
+  local seen="" source_dir skill_dir skill_name dirs
   while IFS= read -r source_dir; do
-    for skill_dir in "$source_dir"/*/; do
-      [[ -f "$skill_dir/$target_file" ]] || continue
-      local skill_name
-      skill_name=$(basename "$skill_dir")
+    # Guarded assignment: a source with no skills exits 1, and set -e would
+    # otherwise kill the whole discovery.
+    dirs=$(skill_dirs_in "$source_dir" "$target_file") || continue
+    # Here-doc, not a pipe — a piped `while read` runs in a subshell and
+    # `seen` would reset for every source.
+    while IFS= read -r skill_dir; do
+      [[ -n "$skill_dir" ]] || continue
+      skill_name="${skill_dir##*/}"
       case ",$seen," in *,"$skill_name",*) continue ;; esac
       seen="$seen,$skill_name"
-      echo "$source_dir:$skill_name"
-    done
+      echo "${skill_dir%/*}:$skill_name"
+    done <<EOF
+$dirs
+EOF
   done < <(read_sources)
 }
 

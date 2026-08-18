@@ -103,6 +103,13 @@ deleted, because a project may still hold a hardlink to one; and `remote_behind`
 The skill directory inside a checkout is detected (`skills/`, `.claude/skills/`, root),
 not configured — asking a user which layout a repo uses is asking them to go look.
 
+Local sources share that detection: `discover_skills` and `list_source_skills` both go
+through `skill_dirs_in`, emitting the skill's direct parent as its source directory so
+`$source_dir/$skill_name` resolves for grouped and flat layouts alike. Discovery once
+flat-globbed `"$source_dir"/*/` on its own — a grouped directory added as a local source
+then showed no skills at all, while the identical repo added as a remote worked, because
+`remote_materialise` had already flattened it into `sources.d/`.
+
 `skill_dirs_in` emits every skill directory, one per line, rather than the one root the
 old `remote_skills_subdir` returned. When a candidate holds no `*/SKILL.md` directly, its
 subdirectories are searched **once** more, which covers the shape a monorepo of skills

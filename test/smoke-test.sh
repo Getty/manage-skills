@@ -510,6 +510,32 @@ else
 fi
 
 echo ""
+echo "Grouped local source"
+# A local directory groups its skills one level deep, exactly like a checkout —
+# discovery has to go through the same detection, not a flat glob.
+GROUPED_LOCAL="$TMPDIR_BASE/grouped-local"
+mkdir -p "$GROUPED_LOCAL/perl/grouped-perl-skill" "$GROUPED_LOCAL/k8s/grouped-k8s-skill"
+echo "# perl" > "$GROUPED_LOCAL/perl/grouped-perl-skill/SKILL.md"
+echo "# k8s" > "$GROUPED_LOCAL/k8s/grouped-k8s-skill/SKILL.md"
+"$MANAGE_SKILLS" sources add "$GROUPED_LOCAL" Grouped local >/dev/null 2>&1
+
+assert_output_contains "grouped-perl-skill" "grouped local: list shows a skill from one group" \
+  "$MANAGE_SKILLS" list
+assert_output_contains "grouped-k8s-skill" "grouped local: list shows the other group too" \
+  "$MANAGE_SKILLS" list
+assert_output_contains "grouped-perl-skill" "grouped local: locations shows a skill from a group" \
+  "$MANAGE_SKILLS" locations
+assert_exit 0 "grouped local: a skill from a group links" "$MANAGE_SKILLS" link grouped-perl-skill
+if [ "$(inode "$PROJECT_DIR/.claude/skills/grouped-perl-skill/SKILL.md" 2>/dev/null)" = \
+     "$(inode "$GROUPED_LOCAL/perl/grouped-perl-skill/SKILL.md")" ]; then
+  pass "grouped local: link shares the source inode"
+else
+  fail "grouped local: link shares the source inode"
+fi
+"$MANAGE_SKILLS" unlink grouped-perl-skill >/dev/null 2>&1 || true
+"$MANAGE_SKILLS" sources remove "$GROUPED_LOCAL" >/dev/null 2>&1 || true
+
+echo ""
 echo "Packaging consistency"
 # The version lives in the script and the plugin manifest; the release
 # workflow bumps both.
