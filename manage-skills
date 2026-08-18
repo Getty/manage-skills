@@ -1225,14 +1225,28 @@ cmd_unlink() {
 }
 
 cmd_sync() {
+  local force=false
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=true; shift ;;
+      *) args[${#args[@]}]="$1"; shift ;;
+    esac
+  done
+
   local target_name
-  target_name=$(resolve_target_arg "$@")
+  # An empty array must not be expanded under `set -u` on bash 3.2.
+  if [[ ${#args[@]} -gt 0 ]]; then
+    target_name=$(resolve_target_arg "${args[@]}")
+  else
+    target_name=$(resolve_target_arg)
+  fi
   local target_info
   target_info=$(get_target "$target_name")
   local target_path="${target_info%%:*}"
   local target_file="${target_info##*:}"
   local project_skills_dir="$PWD/$target_path"
-  local fixed=0 ok=0 missing=0
+  local fixed=0 ok=0 missing=0 diverged=0
 
   echo "${BOLD}Syncing hardlinks${RESET} ${DIM}(target: $target_name)${RESET}"
 
@@ -1245,8 +1259,13 @@ cmd_sync() {
 
     if is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
       ok=$((ok + 1))
+    elif ! $force && ! cmp -s "$dest_file" "$source_file"; then
+      # A copy that also reads differently is somebody's work, not a broken
+      # link. Relinking would delete it, so say so and move on.
+      echo "  ${YELLOW}diverged${RESET} $skill_name  ${DIM}(local content differs — kept)${RESET}"
+      diverged=$((diverged + 1))
     else
-      # File exists but is a copy, not a hardlink — re-link
+      # A copy whose content still matches: relinking loses nothing.
       mkdir -p "$dest_dir"
       rm -f "$dest_file"
       ln "$source_file" "$dest_file"
@@ -1256,7 +1275,11 @@ cmd_sync() {
   done < <(discover_skills "$target_file")
 
   echo ""
-  echo "  ${GREEN}$ok${RESET} ok, ${YELLOW}$fixed${RESET} relinked"
+  echo "  ${GREEN}$ok${RESET} ok, ${YELLOW}$fixed${RESET} relinked, ${YELLOW}$diverged${RESET} diverged"
+  if [[ $diverged -gt 0 ]]; then
+    echo "  ${DIM}Diverged copies were kept. Decide whether the change belongs upstream,${RESET}"
+    echo "  ${DIM}then rerun with ${BOLD}--force${RESET}${DIM} to relink them.${RESET}"
+  fi
 }
 
 cmd_check() {
@@ -1307,7 +1330,8 @@ cmd_check() {
   echo ""
   echo "  ${GREEN}$ok${RESET} linked, ${YELLOW}$copies${RESET} copies, $originals originals"
   if [[ $copies -gt 0 ]]; then
-    echo "  Run ${BOLD}manage-skills sync${RESET} to fix copies"
+    echo "  Run ${BOLD}manage-skills sync${RESET} to relink copies"
+    echo "  ${DIM}Copies whose content differs are kept; sync names them.${RESET}"
   fi
 }
 
@@ -1519,7 +1543,8 @@ ${BOLD}USAGE${RESET}
   manage-skills locations          Show where skills come from, per source
   manage-skills link <skill>...    Hardlink skills into current project
   manage-skills unlink <skill>...  Remove skills from current project
-  manage-skills sync               Re-hardlink stale copies
+  manage-skills sync [--force]     Re-hardlink stale copies (--force also
+                                   relinks copies whose content diverged)
   manage-skills update [name...]   Pull remote sources (--check only reports)
   manage-skills check              Verify hardlink integrity
 

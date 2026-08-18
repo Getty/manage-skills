@@ -158,6 +158,54 @@ name appears in two sources, the first one wins.
 - **For teammates**: an independent copy on clone; `manage-skills sync` relinks it to
   their own sources
 
+### Drift on purpose
+
+`check` marks a skill `[~]` when the project holds its own copy instead of a hardlink,
+and offers `sync` to relink it. That reads like an error report, and often it is one —
+an `Edit` tool rewrote the file and quietly detached it.
+
+But the same state is also a perfectly good way to propose a change. A project adapts a
+shared skill because that project needs something different; the copy diverges, and the
+divergence shows up as **a normal commit in that repo** — reviewable in a pull request,
+visible in `git log`, attributable to whoever made it. Nothing is lost and nothing is
+forced on anyone else. Whoever maintains the source of truth then decides whether it
+belongs upstream: take it, and every project on that hardlink has it; leave it, and the
+one project keeps its local variant.
+
+That is the whole workflow:
+
+```bash
+# in the project — an ordinary edit, an ordinary commit
+$EDITOR .claude/skills/perl-moo/SKILL.md
+git commit -am "perl-moo: our projects need the strict variant"
+
+manage-skills check          # [~] perl-moo (copy, expected hardlink from …)
+```
+
+`sync` protects that on its own. It compares content before relinking:
+
+```
+$ manage-skills sync
+  relinked perl-mcp
+  diverged perl-moo  (local content differs — kept)
+
+  4 ok, 1 relinked, 1 diverged
+  Diverged copies were kept. Decide whether the change belongs upstream,
+  then rerun with --force to relink them.
+```
+
+A copy that still reads exactly like its source is relinked without asking — that is the
+common case, where an `Edit` detached the inode without changing a word, and nothing can
+be lost. A copy that reads *differently* is somebody's work, so it stays and gets named.
+`sync --force` is the deliberate override, for once the change has been taken upstream or
+discarded.
+
+And because the divergence is committed, even a forced sync only removes it from the
+working tree, never from the history.
+
+The `manage-skills-drift-triage` skill covers the other direction — telling a deliberate
+divergence apart from a link that broke by accident, across a whole machine.
+
 ### Remote sources
 
 A source doesn't have to be a directory on your machine. Point it at a repository and
@@ -276,6 +324,19 @@ So for a small, coherent set, where "all or nothing" is also true in substance, 
 is the better route. For a large or mixed one, distributing it as a source and linking
 per project is not merely tidier: it is the only way an agent never sees the skills that
 have no business in this project.
+
+**The routes are not a choice you make once, and not one you make for your users.** The
+same repository serves all three at the same time: `package` writes both plugin
+manifests, and the skills directory it points at is the very one `sources add` reads. So
+somebody can install your set as a Claude Code plugin and update it with
+`/plugin update`, somebody else can take it through Codex with `codex plugin add`, and a
+third can hardlink individual skills into their projects — from one set of files, at the
+same version, with no coordination between them.
+
+manage-skills itself is distributed exactly that way, and that is the point: the
+conventional plugin route is fully supported rather than merely tolerated. If plugin
+updates are all you want, take them; hardlinks are there for when you need to pick per
+project, want the skills committed into a repo, or run neither CLI.
 
 Neither harness fully fixes this after the fact. Claude Code's per-skill visibility
 setting explicitly excludes plugin skills — *"Plugin skills are not affected by

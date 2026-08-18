@@ -21,7 +21,8 @@ manage-skills list                   # Show all skills with status
 manage-skills locations              # Where skills come from, per source
 manage-skills link <skill>...        # Hardlink skills into current project
 manage-skills unlink <skill>...      # Remove skills from current project
-manage-skills sync                   # Re-hardlink stale copies
+manage-skills sync                   # Re-hardlink stale copies (keeps diverged ones)
+manage-skills sync --force           # …and relink the diverged ones too
 manage-skills update [name...]       # Pull remote sources (--check only reports)
 manage-skills package [dir]          # Make a skill directory installable by others
 manage-skills check                  # Verify hardlink integrity
