@@ -1,6 +1,6 @@
 ---
 name: manage-skills-drift-triage
-description: "Finding and resolving hardlink drift under manage-skills — auditing a whole machine for split inodes, and telling a harmless missed link apart from real content divergence. Use when the same skill name turns up with different content across repos, before blindly running `manage-skills sync`, or when a project's skill copy never seems to update."
+description: Use when the same skill name has different content across repos, when a project's skill copy never updates, or before running manage-skills sync on a diverged copy.
 user-invocable: true
 ---
 

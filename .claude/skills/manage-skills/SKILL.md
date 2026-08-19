@@ -1,6 +1,6 @@
 ---
 name: manage-skills
-description: "manage-skills CLI — hardlink-based skill sharing across AI coding tool projects. Use when adding, removing, syncing, editing, or checking shared skills, when asking where a skill comes from, or before editing any hardlinked SKILL.md."
+description: Use when adding, removing, syncing or checking shared skills, when asking where a skill comes from, or before editing any hardlinked SKILL.md.
 user-invocable: true
 ---
 
