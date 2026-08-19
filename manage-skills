@@ -222,6 +222,10 @@ skill_dirs_in() {
     found=""
     for entry in "$dir"/*/; do
       [[ -f "$entry$target_file" ]] || continue
+      # A symlinked skill directory is a pointer, not a source. A repo that
+      # dogfoods its own library links its skills into .claude/skills; those
+      # links must not shadow the library they point at (see skill-library repos).
+      [[ -L "${entry%/}" ]] && continue
       echo "${entry%/}"
       found=yes
     done
@@ -231,6 +235,7 @@ skill_dirs_in() {
       [[ -d "$group" ]] || continue
       for entry in "$group"*/; do
         [[ -f "$entry$target_file" ]] || continue
+        [[ -L "${entry%/}" ]] && continue
         echo "${entry%/}"
         found=yes
       done
