@@ -1,7 +1,7 @@
 {
   "name": "manage-skills",
   "description": "Hardlink-based skill sharing across projects — one source of truth per skill, hardlinks everywhere else. Puts the manage-skills CLI on PATH and ships its own skills.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "author": {
     "name": "Torsten Raudssus",
     "url": "https://github.com/Getty"
