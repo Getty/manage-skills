@@ -54,6 +54,23 @@ Reversed, GNU reads `%i` as a filename, prints filesystem info to stdout and exi
 the fallback then appends the real inode to that garbage and every comparison fails.
 That reversal in the smoke test kept the Linux CI red from the very first run.
 
+## A skill is a directory
+
+`SKILL.md` identifies a skill and is what discovery keys on, but it is not the whole
+skill: `references/`, `templates/` and `scripts/` are linked from it by relative path.
+Linking the entry file alone shipped a skill whose own links were dead in every
+consuming project, and nothing reported it — `check` only ever looked at `SKILL.md`.
+
+So `link`, `sync` and `check` walk the source skill directory (`skill_companion_files`)
+and treat every file in it the same way: hardlinked on link, relinked on sync, counted
+on check. `remote_materialise` copies them across with the same `cat >` truncation, so
+a project hardlinked to a reference file follows an `update` in place.
+
+Two rules carried over from `SKILL.md` deliberately: a companion whose content diverged
+is kept and reported rather than overwritten (`--force` still wins), and a companion
+that vanished upstream is left behind rather than deleted, because a project may still
+be using it.
+
 ## Sync is content-aware
 
 `sync` relinks a copy only when it reads exactly like its source. A copy whose content

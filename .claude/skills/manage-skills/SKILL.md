@@ -189,6 +189,8 @@ manage-skills check
 
 A hardlinked SKILL.md shares one inode across all linked projects. Tools that **rename-and-replace** on save break the link: the path now points to a fresh inode, the other copies still point to the old one with stale content.
 
+This applies to **every file in a skill directory**, not just SKILL.md — `references/`, `templates/` and `scripts/` are hardlinked too, and detach exactly the same way.
+
 - **Write tool (Claude Code)**: rewrites the file → NEW INODE. Breaks hardlinks.
 - **Most editors with "atomic save"**: write to temp, rename over → NEW INODE. Breaks hardlinks.
 - **`cp newfile oldfile`**: copies content into existing inode → safe.

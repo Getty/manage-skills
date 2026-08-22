@@ -311,15 +311,37 @@ remote_materialise() {
     skill_name=$(basename "$skill_dir")
     present="$present $skill_name"
     mkdir -p "$live/$skill_name"
-    if [[ -f "$live/$skill_name/$target_file" ]]; then
-      if ! cmp -s "$skill_dir/$target_file" "$live/$skill_name/$target_file"; then
-        # `cat >` truncates in place — every hardlink to this file follows.
-        cat "$skill_dir/$target_file" > "$live/$skill_name/$target_file"
-        updated=$((updated + 1))
-      fi
-    else
+    local was_new=false changed=false rel
+    if [[ ! -f "$live/$skill_name/$target_file" ]]; then
       cp "$skill_dir/$target_file" "$live/$skill_name/$target_file"
+      was_new=true
+    elif ! cmp -s "$skill_dir/$target_file" "$live/$skill_name/$target_file"; then
+      # `cat >` truncates in place — every hardlink to this file follows.
+      cat "$skill_dir/$target_file" > "$live/$skill_name/$target_file"
+      changed=true
+    fi
+
+    # Companions travel with the skill, through the same truncating write, so a
+    # project hardlinked to a reference file follows the update in place. A
+    # companion that vanished upstream is left behind rather than deleted, for
+    # the same reason a vanished skill is.
+    while IFS= read -r rel; do
+      [[ -n "$rel" ]] || continue
+      mkdir -p "$(dirname "$live/$skill_name/$rel")"
+      if [[ ! -f "$live/$skill_name/$rel" ]]; then
+        cp "$skill_dir/$rel" "$live/$skill_name/$rel"
+        changed=true
+      elif ! cmp -s "$skill_dir/$rel" "$live/$skill_name/$rel"; then
+        cat "$skill_dir/$rel" > "$live/$skill_name/$rel"
+        changed=true
+      fi
+    done < <(skill_companion_files "$skill_dir" "$target_file")
+
+    # Counted per skill, not per file: the caller prints these as skill counts.
+    if $was_new; then
       added=$((added + 1))
+    elif $changed; then
+      updated=$((updated + 1))
     fi
   done <<EOF
 $skill_dirs
@@ -394,6 +416,80 @@ is_hardlinked() {
   inode_p=$(stat -c %i "$project_file" 2>/dev/null || stat -f %i "$project_file" 2>/dev/null)
   inode_s=$(stat -c %i "$source_file" 2>/dev/null || stat -f %i "$source_file" 2>/dev/null)
   [[ "$inode_p" == "$inode_s" ]]
+}
+
+# ── Companion files ──────────────────────────────────────────────────
+#
+# A skill is a directory, not a file: SKILL.md plus whatever it links to —
+# references/, templates/, scripts/. Only SKILL.md identifies the skill, which
+# is why discovery keys on it, but a relative link inside a SKILL.md is dead in
+# a project that received that one file alone. So everything under the source
+# skill directory is linked, not just the entry point.
+#
+# Emits paths relative to the skill directory, one per line, with the entry
+# file left out — its own link is the caller's business.
+skill_companion_files() {
+  local skill_dir="$1"
+  local target_file="$2"
+  local f rel
+  [[ -d "$skill_dir" ]] || return 0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    rel="${f#$skill_dir/}"
+    if [[ "$rel" != "$target_file" ]]; then
+      echo "$rel"
+    fi
+  done < <(find "$skill_dir" -type f 2>/dev/null | LC_ALL=C sort)
+}
+
+# Hardlinks a skill's companion files into the project, creating subdirectories
+# as it goes. Reports through two globals rather than stdout, because callers
+# print their own lines: companions_linked and companions_diverged.
+#
+# $4 force: when false, a companion whose content differs from its source is
+# left alone and counted as diverged — the same rule cmd_sync applies to
+# SKILL.md, and for the same reason. A file that vanished upstream is never
+# deleted here; a project may still be using it.
+link_companion_files() {
+  local source_skill_dir="$1"
+  local dest_skill_dir="$2"
+  local target_file="$3"
+  local force="${4:-false}"
+  local rel src dst
+  companions_linked=0
+  companions_diverged=0
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    src="$source_skill_dir/$rel"
+    dst="$dest_skill_dir/$rel"
+    if is_hardlinked "$dst" "$src" 2>/dev/null; then
+      continue
+    fi
+    if [[ -f "$dst" ]] && ! $force && ! cmp -s "$dst" "$src"; then
+      companions_diverged=$((companions_diverged + 1))
+      continue
+    fi
+    mkdir -p "$(dirname "$dst")"
+    rm -f "$dst"
+    ln "$src" "$dst"
+    companions_linked=$((companions_linked + 1))
+  done < <(skill_companion_files "$source_skill_dir" "$target_file")
+}
+
+# Counts a skill's companion files that are not hardlinks to their source,
+# missing ones included. Reports through companions_unlinked.
+check_companion_files() {
+  local source_skill_dir="$1"
+  local dest_skill_dir="$2"
+  local target_file="$3"
+  local rel
+  companions_unlinked=0
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    if ! is_hardlinked "$dest_skill_dir/$rel" "$source_skill_dir/$rel" 2>/dev/null; then
+      companions_unlinked=$((companions_unlinked + 1))
+    fi
+  done < <(skill_companion_files "$source_skill_dir" "$target_file")
 }
 
 # ── Layout ───────────────────────────────────────────────────────────
@@ -1196,14 +1292,26 @@ cmd_link() {
       local dest_file="$dest_dir/$target_file"
 
       if is_hardlinked "$dest_file" "$source_file" 2>/dev/null; then
-        info "$skill_name: already linked"
+        # The entry file is linked, but companions may still be missing —
+        # a skill that grew a references/ after it was first linked.
+        link_companion_files "$source_dir/$skill_name" "$dest_dir" "$target_file" true
+        if [[ $companions_linked -gt 0 ]]; then
+          echo "  ${GREEN}linked${RESET} $skill_name ${DIM}($companions_linked companion files)${RESET}"
+        else
+          info "$skill_name: already linked"
+        fi
         break
       fi
 
       mkdir -p "$dest_dir"
       rm -f "$dest_file"
       ln "$source_file" "$dest_file"
-      echo "  ${GREEN}linked${RESET} $skill_name ← $source_dir"
+      link_companion_files "$source_dir/$skill_name" "$dest_dir" "$target_file" true
+      if [[ $companions_linked -gt 0 ]]; then
+        echo "  ${GREEN}linked${RESET} $skill_name ← $source_dir ${DIM}(+$companions_linked files)${RESET}"
+      else
+        echo "  ${GREEN}linked${RESET} $skill_name ← $source_dir"
+      fi
       break
     done < <(discover_skills "$target_file")
 
@@ -1293,6 +1401,18 @@ cmd_sync() {
       echo "  ${GREEN}relinked${RESET} $skill_name"
       fixed=$((fixed + 1))
     fi
+
+    # Companions are synced whatever the entry file's state was: a skill that
+    # grew a references/ upstream reaches its projects through here.
+    link_companion_files "$source_dir/$skill_name" "$dest_dir" "$target_file" "$force"
+    if [[ $companions_linked -gt 0 ]]; then
+      echo "  ${GREEN}relinked${RESET} $skill_name ${DIM}($companions_linked companion files)${RESET}"
+      fixed=$((fixed + 1))
+    fi
+    if [[ $companions_diverged -gt 0 ]]; then
+      echo "  ${YELLOW}diverged${RESET} $skill_name ${DIM}($companions_diverged companion files differ — kept)${RESET}"
+      diverged=$((diverged + 1))
+    fi
   done < <(discover_skills "$target_file")
 
   echo ""
@@ -1337,11 +1457,17 @@ cmd_check() {
 
     if [[ -n "$source_dir" ]]; then
       local source_file="$source_dir/$skill_name/$target_file"
-      if is_hardlinked "$skill_dir/$target_file" "$source_file"; then
-        ok=$((ok + 1))
-      else
+      check_companion_files "$source_dir/$skill_name" "$skill_dir" "$target_file"
+      if ! is_hardlinked "$skill_dir/$target_file" "$source_file"; then
         echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(copy, expected hardlink from $source_dir)${RESET}"
         copies=$((copies + 1))
+      elif [[ $companions_unlinked -gt 0 ]]; then
+        # The entry file is fine, so the skill loads — but a relative link
+        # inside it points at a file this project does not have.
+        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}($companions_unlinked companion files missing or copies)${RESET}"
+        copies=$((copies + 1))
+      else
+        ok=$((ok + 1))
       fi
     else
       originals=$((originals + 1))

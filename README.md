@@ -151,7 +151,10 @@ name appears in two sources, the first one wins.
 ### Hardlinking
 
 `manage-skills link perl-moo` finds `perl-moo/SKILL.md` in your sources, creates
-`.claude/skills/perl-moo/` in the current project, and hardlinks the file into it.
+`.claude/skills/perl-moo/` in the current project, and hardlinks the file into it —
+along with every other file in the skill's directory, `references/` and `templates/`
+included, so a relative link inside a SKILL.md still resolves in the project that
+received it.
 
 - **On your machine**: editing either path changes both — same inode
 - **In Git**: a normal file, committed like any other

@@ -536,6 +536,93 @@ fi
 "$MANAGE_SKILLS" sources remove "$GROUPED_LOCAL" >/dev/null 2>&1 || true
 
 echo ""
+echo "Companion files"
+# A skill is a directory, not a file. SKILL.md identifies it, but a relative
+# link inside SKILL.md is dead in a project that received that file alone —
+# which is what shipped until link/sync/check learned to carry the rest.
+COMPANION_SRC="$TMPDIR_BASE/sources/companion-src"
+mkdir -p "$COMPANION_SRC/deep-skill/references"
+mkdir -p "$COMPANION_SRC/deep-skill/templates"
+echo "# Deep Skill" > "$COMPANION_SRC/deep-skill/SKILL.md"
+echo "reference one" > "$COMPANION_SRC/deep-skill/references/one.md"
+echo "reference two" > "$COMPANION_SRC/deep-skill/references/two.md"
+echo "a template" > "$COMPANION_SRC/deep-skill/templates/thing.txt"
+"$MANAGE_SKILLS" sources add "$COMPANION_SRC" >/dev/null 2>&1
+
+cd "$PROJECT_DIR"
+assert_exit 0 "companions: link a skill with references" "$MANAGE_SKILLS" link deep-skill
+
+if [ -f "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md" ]; then
+  pass "companions: reference file exists in the project"
+else
+  fail "companions: reference file exists in the project"
+fi
+
+if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md" 2>/dev/null)" = \
+     "$(inode "$COMPANION_SRC/deep-skill/references/one.md")" ]; then
+  pass "companions: reference file shares the source inode"
+else
+  fail "companions: reference file shares the source inode"
+fi
+
+if [ -f "$PROJECT_DIR/.claude/skills/deep-skill/templates/thing.txt" ]; then
+  pass "companions: nested subdirectories are recreated"
+else
+  fail "companions: nested subdirectories are recreated"
+fi
+
+assert_output_contains "0 copies" "companions: check is clean when everything is linked" \
+  "$MANAGE_SKILLS" check
+
+# A file added upstream after the skill was linked reaches the project through
+# link and through sync alike — neither may need an unlink first.
+echo "reference three" > "$COMPANION_SRC/deep-skill/references/three.md"
+"$MANAGE_SKILLS" link deep-skill >/dev/null 2>&1
+if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/three.md" 2>/dev/null)" = \
+     "$(inode "$COMPANION_SRC/deep-skill/references/three.md")" ]; then
+  pass "companions: a newly added reference is picked up by link"
+else
+  fail "companions: a newly added reference is picked up by link"
+fi
+
+# Detach one companion the way an editor that replaces files would, leaving
+# the content identical: check must notice, sync must repair.
+rm -f "$PROJECT_DIR/.claude/skills/deep-skill/references/two.md"
+cp "$COMPANION_SRC/deep-skill/references/two.md" \
+   "$PROJECT_DIR/.claude/skills/deep-skill/references/two.md"
+assert_output_contains "companion files missing or copies" \
+  "companions: check reports a detached companion" "$MANAGE_SKILLS" check
+assert_exit 0 "companions: sync runs" "$MANAGE_SKILLS" sync
+if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/two.md" 2>/dev/null)" = \
+     "$(inode "$COMPANION_SRC/deep-skill/references/two.md")" ]; then
+  pass "companions: sync relinks a detached companion"
+else
+  fail "companions: sync relinks a detached companion"
+fi
+
+# A companion whose content diverged is somebody's work — sync keeps it, the
+# same rule SKILL.md gets.
+rm -f "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md"
+echo "locally changed" > "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md"
+assert_output_contains "companion files differ" \
+  "companions: sync reports a diverged companion" "$MANAGE_SKILLS" sync
+if grep -q "locally changed" "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md"; then
+  pass "companions: a diverged companion is kept"
+else
+  fail "companions: a diverged companion is kept"
+fi
+assert_exit 0 "companions: sync --force relinks the diverged one" "$MANAGE_SKILLS" sync --force
+if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md" 2>/dev/null)" = \
+     "$(inode "$COMPANION_SRC/deep-skill/references/one.md")" ]; then
+  pass "companions: --force wins over a diverged companion"
+else
+  fail "companions: --force wins over a diverged companion"
+fi
+
+"$MANAGE_SKILLS" unlink deep-skill >/dev/null 2>&1 || true
+"$MANAGE_SKILLS" sources remove "$COMPANION_SRC" >/dev/null 2>&1 || true
+
+echo ""
 echo "Packaging consistency"
 # The version lives in the script and the plugin manifest; the release
 # workflow bumps both.
