@@ -1,3 +1,10 @@
+<p align="center">
+  <a href="https://github.com/Getty/manage-skills">
+    <img src="assets/github.png" width="800"
+         alt="manage-skills — a llama in dungarees at a telephone switchboard, patching yellow cords into a wall of numbered pigeonhole cabinets">
+  </a>
+</p>
+
 # manage-skills
 
 **Hardlink-based skill sharing across AI coding tool projects.**
@@ -62,10 +69,10 @@ the command in your own shell as well, install it properly with one of the route
 that is worth doing in either harness, since a plugin only ever reaches the agent's
 shell, never yours.
 
-**Homebrew:**
+**One-liner** (downloads a standalone copy):
 
 ```bash
-brew install Getty/manage-skills/manage-skills
+curl -fsSL https://raw.githubusercontent.com/Getty/manage-skills/main/install.sh | bash
 ```
 
 **From a clone** (dev mode — symlinks the script so your edits are live):
@@ -76,10 +83,10 @@ cd manage-skills
 ./install.sh
 ```
 
-**One-liner** (downloads a standalone copy):
+**Homebrew:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Getty/manage-skills/main/install.sh | bash
+brew install Getty/manage-skills/manage-skills
 ```
 
 ## Quick Start
@@ -92,6 +99,9 @@ manage-skills init                    # create ~/.manage-skills/
 manage-skills sources add ~/dev/shared-skills      Cross-language: K8s, CI, tools
 manage-skills sources add ~/dev/perl/shared-skills Shared Perl ecosystem
 manage-skills self install                         # the skills this tool ships
+
+# Somebody else's set: a GitHub owner name is all it takes.
+manage-skills sources add Getty                    # github.com/Getty/skills
 
 cd ~/dev/my-project
 manage-skills locations               # where does everything come from?
@@ -113,7 +123,7 @@ manage-skills                         # …or pick interactively
 | `manage-skills package [dir]` | Make a skill directory installable by others |
 | `manage-skills check` | Verify hardlink integrity |
 | `manage-skills sources` | List source directories |
-| `manage-skills sources add <dir\|repo> [label]` | Add a source — a directory or a git repo |
+| `manage-skills sources add <dir\|repo\|owner> [label]` | Add a source — a directory, a git repo, or a GitHub owner (their `skills` repo) |
 | `manage-skills sources remove <dir>` | Remove a source |
 | `manage-skills targets` | List configured targets |
 | `manage-skills self` | Where this install and its own skills live |
@@ -215,12 +225,34 @@ A source doesn't have to be a directory on your machine. Point it at a repositor
 manage-skills keeps a copy for you:
 
 ```bash
-manage-skills sources add github:Getty/perl-skills Shared Perl ecosystem
+manage-skills sources add github:someone/their-skills Their skills
 manage-skills link perl-moo perl-mcp
 
 manage-skills update --check   # anything new upstream?
 manage-skills update           # fetch it
 ```
+
+**An owner name on its own is enough**, if their repository is called `skills` —
+which is the convention this tool sets, and what `package` tells people to use:
+
+```bash
+manage-skills sources add Getty        # → github.com/Getty/skills
+manage-skills link getty-perl-moo getty-git-usage
+```
+
+Exactly one name is tried, never a chain of guesses. An owner with no `skills` repo
+gets told what to type instead, rather than being quietly resolved somewhere else:
+
+```
+$ manage-skills sources add nobodyhere
+  nobodyhere → github:nobodyhere/skills
+error: github.com/nobodyhere/skills not found.
+  Give the repo in full:
+    manage-skills sources add github:nobodyhere/<repo>
+```
+
+A directory of that name in the way always wins — what is on disk is never guessed
+past — and the shorthand is printed in case that wasn't what you meant.
 
 No Claude Code required — this is bash and git. Skills from a remote source hardlink into
 your projects exactly like local ones, get committed with the repo, and reach teammates
@@ -232,7 +264,7 @@ moment `update` finishes. There is nothing to run in each project afterwards:
 
 ```
 $ manage-skills update
-github:Getty/perl-skills
+github:Getty/skills
   2 updated, 1 new
 ```
 
@@ -258,15 +290,20 @@ Add to your marketplace's .claude-plugin/marketplace.json:
 
     {
       "name": "perl-skills",
-      "source": { "source": "github", "repo": "Getty/perl-skills" },
+      "source": { "source": "github", "repo": "you/perl-skills" },
       "description": "..."
     }
 
 Then people can take your skills three ways:
   Claude Code   /plugin install perl-skills@<marketplace>
   Codex         codex plugin add perl-skills@<marketplace>
-  Any tool      manage-skills sources add github:Getty/perl-skills
+  Any tool      manage-skills sources add github:you/perl-skills
 ```
+
+**Call the repo `skills` and that last line gets shorter still** — `package` prints
+`manage-skills sources add you`, because an owner name alone resolves to their `skills`
+repo. It costs nothing to follow and saves everyone who takes your set from having to
+remember what you called it.
 
 The three routes suit different people, which is why it sets up all of them:
 

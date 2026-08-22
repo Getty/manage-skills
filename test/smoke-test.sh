@@ -623,6 +623,89 @@ fi
 "$MANAGE_SKILLS" sources remove "$COMPANION_SRC" >/dev/null 2>&1 || true
 
 echo ""
+echo "Owner shorthand"
+# `manage-skills sources add Getty` means github.com/Getty/skills. The host is
+# a variable purely so this can be exercised without a network: a file:// tree
+# laid out the way GitHub is, one directory per owner.
+if command -v git >/dev/null 2>&1; then
+  FAKEHUB="$TMPDIR_BASE/fakehub"
+
+  make_owner_repo() {
+    local owner="$1" skill="$2" repo
+    repo="$FAKEHUB/$owner/skills.git"
+    mkdir -p "$repo/$skill"
+    echo "# $skill" > "$repo/$skill/SKILL.md"
+    (
+      cd "$repo"
+      git init -q -b main .
+      git -c user.email=t@example.com -c user.name=Test add -A
+      git -c user.email=t@example.com -c user.name=Test commit -qm "$skill"
+    ) >/dev/null 2>&1
+  }
+
+  make_owner_repo Getty owner-shorthand-skill
+  make_owner_repo Someone someone-only-skill
+
+  SHORTHAND_PROJECT="$TMPDIR_BASE/shorthand-project"
+  mkdir -p "$SHORTHAND_PROJECT"
+  cd "$SHORTHAND_PROJECT"
+
+  export MANAGE_SKILLS_GITHUB_BASE="file://$FAKEHUB"
+
+  assert_output_contains "github:Getty/skills" "shorthand: a bare owner expands to its skills repo" \
+    "$MANAGE_SKILLS" sources add Getty Getty shared skills
+
+  # Every owner has a repo called `skills`, so the last path segment cannot be
+  # the local name — sources.d/ is flat and the second one would land on the
+  # first.
+  if [ -d "$MANAGE_SKILLS_HOME/sources.d/getty-skills" ]; then
+    pass "shorthand: the checkout is named after the owner"
+  else
+    fail "shorthand: the checkout is named after the owner" \
+      "$(ls "$MANAGE_SKILLS_HOME/sources.d" 2>/dev/null | tr '\n' ' ')"
+  fi
+
+  assert_output_contains "owner-shorthand-skill" "shorthand: the skills are discoverable" \
+    "$MANAGE_SKILLS" list
+
+  assert_exit 0 "shorthand: github:owner expands the same way" \
+    "$MANAGE_SKILLS" sources add github:Someone
+
+  if [ -d "$MANAGE_SKILLS_HOME/sources.d/someone-skills" ]; then
+    pass "shorthand: a second owner's skills repo gets its own directory"
+  else
+    fail "shorthand: a second owner's skills repo gets its own directory" \
+      "$(ls "$MANAGE_SKILLS_HOME/sources.d" 2>/dev/null | tr '\n' ' ')"
+  fi
+
+  # A directory of that name is never guessed past. It also has to be added
+  # rather than skipped: `Someone` is a substring of the configured
+  # `github:Someone/skills`, which a substring test read as already present.
+  mkdir -p "$SHORTHAND_PROJECT/Someone/local-owner-skill"
+  echo "# local" > "$SHORTHAND_PROJECT/Someone/local-owner-skill/SKILL.md"
+  assert_output_contains "so it won" "shorthand: a directory of that name wins over the owner" \
+    "$MANAGE_SKILLS" sources add Someone
+
+  assert_output_contains "local-owner-skill" "shorthand: that directory really became a source" \
+    "$MANAGE_SKILLS" list
+
+  # One name is tried, never a chain of guesses, so the failure has to say
+  # what to type instead.
+  assert_output_contains "Give the repo in full" "shorthand: an owner with no skills repo says what to type" \
+    "$MANAGE_SKILLS" sources add Nobodyhere
+
+  assert_exit 1 "shorthand: that failure is an error" "$MANAGE_SKILLS" sources add Nobodyhere
+
+  "$MANAGE_SKILLS" sources remove Someone >/dev/null 2>&1 || true
+  "$MANAGE_SKILLS" sources remove github:Getty/skills >/dev/null 2>&1 || true
+  "$MANAGE_SKILLS" sources remove github:Someone/skills >/dev/null 2>&1 || true
+  unset MANAGE_SKILLS_GITHUB_BASE
+  cd "$PROJECT_DIR"
+else
+  echo "  skip  owner shorthand (git not available)"
+fi
+
+echo ""
 echo "Packaging consistency"
 # The version lives in the script and the plugin manifest; the release
 # workflow bumps both.

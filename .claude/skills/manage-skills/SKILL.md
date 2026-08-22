@@ -27,7 +27,8 @@ manage-skills update [name...]       # Pull remote sources (--check only reports
 manage-skills package [dir]          # Make a skill directory installable by others
 manage-skills check                  # Verify hardlink integrity
 manage-skills sources                # List source directories
-manage-skills sources add <dir|repo> [label]  # Add a source, local or remote
+manage-skills sources add <dir|repo|owner> [label]  # Add a source: directory,
+                                     #   repo, or GitHub owner (their skills repo)
 manage-skills sources remove <dir>   # Remove a skill source
 manage-skills targets                # List configured targets
 manage-skills targets add <n> <p> <f> # Add target (name:path:file)
@@ -102,10 +103,19 @@ on `PATH` and loads both skills:
 A source can be a repository instead of a directory:
 
 ```bash
-manage-skills sources add github:Getty/perl-skills Shared Perl ecosystem
+manage-skills sources add github:someone/their-skills Their skills
 manage-skills update --check   # anything new upstream?
 manage-skills update           # fetch it
 ```
+
+**A bare owner name resolves to that owner's `skills` repo** — `manage-skills sources
+add Getty` is `github:Getty/skills`. That is the convention this tool sets, so it is
+the line to suggest when someone asks how to get a published set. Exactly one name is
+tried: an owner with no `skills` repo is told to give the repo in full, never resolved
+somewhere else. A directory of that name in the current directory wins over the owner.
+
+The local checkout of a `skills` repo is named after its owner (`sources.d/getty-skills`),
+because every owner has one and `sources.d/` is flat.
 
 `update` writes changed files **in place**, so the inode survives and every project
 already linked to that skill has the new content the moment it finishes. Never run a
@@ -127,7 +137,8 @@ directories where they already are — no copying — and prints both install ro
   anyone who just wants the skills on their machine.
 - `manage-skills sources add github:owner/repo` — for anyone who wants them committed
   into their projects (teammates get them on clone), picked per project, or uses neither
-  of those CLIs.
+  of those CLIs. A repo called `skills` shortens that to `manage-skills sources add
+  <owner>`, and `package` prints whichever form actually works for the repo.
 
 Both plugin systems read `<name>/SKILL.md`, so one skills directory serves both — only
 the manifests differ (`.claude-plugin/` and `.codex-plugin/`). An existing manifest is

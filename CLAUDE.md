@@ -120,6 +120,23 @@ deleted, because a project may still hold a hardlink to one; and `remote_behind`
 The skill directory inside a checkout is detected (`skills/`, `.claude/skills/`, root),
 not configured — asking a user which layout a repo uses is asking them to go look.
 
+**`Getty` means `github:Getty/skills`.** That is a convention the tool sets rather than
+one it discovers, so it has to hold everywhere it shows: `sources add`, the help, the
+README, the shipped skill, and the line `package` prints for a repo named `skills`.
+Exactly one name is tried — a chain of guesses (`<owner>-skills`, `claude-skills`) costs
+a network round-trip each and leaves the user unsure which one answered, so an owner with
+no `skills` repo gets told what to type instead. A directory of that name wins: what is
+on disk is never guessed past, and the shorthand is printed in case that wasn't meant.
+
+Two things follow. `remote_name` cannot be the last path segment any more — every owner
+has a repo called `skills`, and `sources.d/` is flat, so those keep the owner in front
+(`getty-skills`) or the second source lands on the first. And `sources add` compares the
+*parsed* source path rather than grepping for a substring: `Getty` is a substring of a
+configured `github:Getty/skills`, which the old `grep -qF` read as already present.
+
+`GITHUB_BASE` exists so the smoke tests can point the whole path at a `file://` tree laid
+out like GitHub and exercise cloning offline. Nothing else should read it.
+
 Local sources share that detection: `discover_skills` and `list_source_skills` both go
 through `skill_dirs_in`, emitting the skill's direct parent as its source directory so
 `$source_dir/$skill_name` resolves for grouped and flat layouts alike. Discovery once

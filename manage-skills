@@ -6,6 +6,9 @@ SELF_REPO="${MANAGE_SKILLS_REPO:-Getty/manage-skills}"
 # Skills this tool ships. Kept in sync with .claude/skills/ by the smoke tests.
 SELF_SKILLS="manage-skills manage-skills-drift-triage"
 CONFIG_DIR="${MANAGE_SKILLS_HOME:-$HOME/.manage-skills}"
+# Where `github:owner/repo` resolves. Overridable so the tests can stand up a
+# file:// tree and exercise cloning without a network.
+GITHUB_BASE="${MANAGE_SKILLS_GITHUB_BASE:-https://github.com}"
 SOURCES_FILE="$CONFIG_DIR/sources"
 TARGETS_FILE="$CONFIG_DIR/targets"
 # A remote source is kept twice on purpose. CACHE_DIR holds the git clone and
@@ -109,6 +112,21 @@ read_source_lines() {
   done < "$SOURCES_FILE"
 }
 
+# True when a source line already names exactly this path or spec. A substring
+# test did until `Getty` started expanding to `github:Getty/skills`, at which
+# point every prefix of a configured line read as already present.
+source_configured() {
+  local wanted line
+  wanted="$1"
+  [[ -f "$SOURCES_FILE" ]] || return 1
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    parse_source_line "$line"
+    [[ "$SOURCE_PATH" == "$wanted" ]] && return 0
+  done < "$SOURCES_FILE"
+  return 1
+}
+
 read_sources() {
   local path label spec
   while IFS=$'\t' read -r path label spec; do
@@ -175,21 +193,62 @@ is_remote_spec() {
 }
 
 # Clone URL for a spec. `github:owner/repo` is shorthand; anything else is
-# already a URL that git understands.
+# already a URL that git understands. The host is a variable so the test suite
+# can point the whole path at a local file:// tree and exercise it offline.
 remote_clone_url() {
   case "$1" in
-    github:*) echo "https://github.com/${1#github:}.git" ;;
+    github:*) echo "$GITHUB_BASE/${1#github:}.git" ;;
     *)        echo "$1" ;;
   esac
 }
 
 # Local name for a remote source — the repository name, minus any .git suffix.
+#
+# `skills` is the exception, and it is the convention this tool sets, so it is
+# also the name most likely to collide: every owner has one. Those keep the
+# owner in front — github:Getty/skills becomes getty-skills — because two
+# sources sharing a directory under sources.d/ would overwrite each other.
 remote_name() {
-  local spec="$1" name
-  name="${spec%.git}"
-  name="${name##*/}"
+  local spec path name owner
+  spec="$1"
+  path="${spec%.git}"
+  path="${path#github:}"
+  name="${path##*/}"
+  if [[ "$name" == "skills" && "$path" == */* ]]; then
+    owner="${path%/*}"
+    owner="${owner##*/}"
+    owner="${owner##*:}"
+    if [[ -n "$owner" ]]; then
+      # bash 3.2 has no ${var,,}; a here-string keeps this out of a pipeline,
+      # which `set -o pipefail` would make load-bearing inside an assignment.
+      owner=$(tr '[:upper:]' '[:lower:]' <<<"$owner")
+      echo "$owner-skills"
+      return
+    fi
+  fi
   name="${name##*:}"
   echo "$name"
+}
+
+# `Getty` and `github:Getty` both name github.com/Getty/skills.
+#
+# That is a convention this tool sets rather than one it discovers: an owner
+# name alone means the repository called `skills` under it. Exactly one name is
+# tried, never a chain of guesses — a shorthand that quietly resolves somewhere
+# else is worse than one that fails and says what to type instead.
+#
+# Returns 1 for anything that already names a repository, a path or a URL.
+owner_source_spec() {
+  local candidate="$1"
+  case "$candidate" in
+    github:*) candidate="${candidate#github:}" ;;
+  esac
+  # GitHub owner names are alphanumeric plus hyphens, never leading. That also
+  # rules out ./foo, foo/bar, example.com and every URL scheme in one test.
+  case "$candidate" in
+    '' | -* | *[!A-Za-z0-9-]*) return 1 ;;
+  esac
+  echo "github:$candidate/skills"
 }
 
 # Every skill directory inside a checkout, one per line. Detected rather than
@@ -618,13 +677,28 @@ cmd_sources() {
       done < "$SOURCES_FILE"
       ;;
     add)
-      [[ -z "${1:-}" ]] && die "Usage: manage-skills sources add <directory|repo> [label...]"
+      [[ -z "${1:-}" ]] && die "Usage: manage-skills sources add <directory|repo|owner> [label...]"
       local dir="$1"
       shift
       local label="$*"
-      local expanded
+      local expanded shorthand
+      expanded=""
+      shorthand=""
+
+      # A bare owner name means that owner's `skills` repo — but only when
+      # nothing of that name is on disk. What is actually there is never
+      # guessed past, so the directory wins and the shorthand is offered.
+      is_remote_spec "$dir" || expanded=$(expand_path "$dir")
+      shorthand=$(owner_source_spec "$dir" 2>/dev/null || true)
+      if [[ -n "$shorthand" && ( -z "$expanded" || ! -d "$expanded" ) ]]; then
+        echo "  ${DIM}$dir → $shorthand${RESET}"
+        dir="$shorthand"
+        expanded=""
+        shorthand=""
+      fi
+
       if is_remote_spec "$dir"; then
-        if grep -qF "$dir" "$SOURCES_FILE" 2>/dev/null; then
+        if source_configured "$dir"; then
           warn "Already in sources: $dir"
           return
         fi
@@ -640,8 +714,7 @@ cmd_sources() {
       fi
       expanded=$(expand_path "$dir")
       [[ -d "$expanded" ]] || die "Directory not found: $expanded"
-      # Check if already in sources
-      if grep -qF "$dir" "$SOURCES_FILE" 2>/dev/null; then
+      if source_configured "$dir"; then
         warn "Already in sources: $dir"
         return
       fi
@@ -651,6 +724,10 @@ cmd_sources() {
       else
         echo "$dir" >> "$SOURCES_FILE"
         info "Added: $dir"
+      fi
+      if [[ -n "$shorthand" ]]; then
+        echo "  ${DIM}a directory of that name is here, so it won${RESET}"
+        echo "  ${DIM}for the GitHub owner: manage-skills sources add github:$dir${RESET}"
       fi
       ;;
     remove)
@@ -895,7 +972,20 @@ remote_add() {
     [[ -e "$cache" ]] && die "$name: $(shorten "$cache") exists and is not a checkout"
     mkdir -p "$CACHE_DIR"
     info "Cloning $url"
-    git clone --quiet --depth 1 "$url" "$cache" || die "Clone failed: $url"
+    if ! git clone --quiet --depth 1 "$url" "$cache"; then
+      rm -rf "$cache"
+      # The one shorthand that resolves without being typed in full deserves
+      # the one error message that says what to type instead.
+      case "$spec" in
+        github:*/skills)
+          local owner="${spec#github:}"
+          owner="${owner%/skills}"
+          die "${GITHUB_BASE#https://}/$owner/skills not found.
+  Give the repo in full:
+    manage-skills sources add github:$owner/<repo>" ;;
+      esac
+      die "Clone failed: $url"
+    fi
   fi
 
   local counts
@@ -959,7 +1049,7 @@ cmd_update() {
 
   if ! $any; then
     warn "No remote sources configured."
-    echo "  manage-skills sources add github:owner/repo"
+    echo "  manage-skills sources add github:owner/repo   ${DIM}(or just: owner)${RESET}"
     return
   fi
   if [[ ${#wanted[@]} -gt 0 ]] && ! $found; then
@@ -1115,7 +1205,12 @@ ENTRY
   echo "${BOLD}Then people can take your skills three ways:${RESET}"
   echo "  ${DIM}Claude Code${RESET}   /plugin install $plugin_name@<marketplace>"
   echo "  ${DIM}Codex${RESET}         codex plugin add $plugin_name@<marketplace>"
-  echo "  ${DIM}Any tool${RESET}      manage-skills sources add github:$slug"
+  # A repo called `skills` is reachable by owner name alone — print the
+  # shortest line that actually works for this repo, not the general form.
+  case "$slug" in
+    */skills) echo "  ${DIM}Any tool${RESET}      manage-skills sources add ${slug%/skills}" ;;
+    *)        echo "  ${DIM}Any tool${RESET}      manage-skills sources add github:$slug" ;;
+  esac
   echo ""
   echo "${DIM}Same repo, same files, no copy. Both plugin systems read"
   echo "<name>/SKILL.md, so only the two manifests differ.${RESET}"
@@ -1707,9 +1802,10 @@ ${BOLD}SELF${RESET}
 ${BOLD}CONFIG${RESET}
   manage-skills init               Create ~/.manage-skills/ config
   manage-skills sources            List source directories
-  manage-skills sources add <dir|repo> [label]
+  manage-skills sources add <dir|repo|owner> [label]
                                    Add a skill source, local or remote
-                                   (github:owner/repo, or any git URL)
+                                   (github:owner/repo, or any git URL;
+                                   a bare owner means github:owner/skills)
   manage-skills sources remove <dir>
   manage-skills targets            List configured targets
   manage-skills targets add <name> <path> <file>
@@ -1729,6 +1825,7 @@ ${BOLD}EXAMPLES${RESET}
   manage-skills init
   manage-skills sources add ~/dev/shared-skills Cross-language: K8s, CI, tools
   manage-skills sources add ~/dev/perl/shared-skills Shared Perl ecosystem
+  manage-skills sources add Getty           # github.com/Getty/skills
   manage-skills locations                   # where does everything come from?
   cd ~/my-project && manage-skills          # interactive
   manage-skills link perl-moo dbio-core     # link specific skills
