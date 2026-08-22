@@ -101,8 +101,8 @@ rejects are output, not an exit code, because the bug being fixed was a menu tha
 `^[0-9]+$` and let every other keystroke fall through the `case` without a word.
 
 Keep it a pure function of its two arguments. That is what lets the smoke tests source
-the script and exercise it directly, which matters because CI runners ship fzf and never
-reach the menu at all.
+the script and exercise it directly instead of driving the menu through stdin, which only
+runs where fzf is absent — true of the CI runners today, but nothing enforces it.
 
 ## Rendering
 

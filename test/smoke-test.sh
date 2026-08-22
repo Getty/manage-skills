@@ -709,8 +709,8 @@ echo ""
 echo "Menu input"
 # The numbered menu took exactly one number and dropped everything else on the
 # floor without a word. The parser is exercised directly — sourcing the script
-# reaches it whether or not fzf is installed, and on a CI runner it usually is,
-# which would skip the menu entirely.
+# reaches it whether or not fzf is installed, unlike the end-to-end run below,
+# which is skipped wherever fzf is present.
 assert_menu() {
   local input="$1" total="$2" expected="$3" desc="$4"
   local got
