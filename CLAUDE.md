@@ -49,6 +49,11 @@ against `/bin/bash` and a Homebrew bash 5.x.
 statement first and assigns afterwards, so the second reads an unset variable and the
 script dies. Split them onto separate `local` lines when one derives from another.
 
+**Arithmetic on typed input needs `10#`.** `$((08))` is an octal literal, and an
+invalid one — a fatal error, not a rejected token, so a user typing `08` into the
+numbered menu would have killed the script. `parse_menu_selection` forces base 10 on
+everything it read from the prompt.
+
 **`stat` argument order matters**: `stat -c %i` first, `stat -f %i` as the fallback.
 Reversed, GNU reads `%i` as a filename, prints filesystem info to stdout and exits 1 —
 the fallback then appends the real inode to that garbage and every comparison fails.
@@ -86,6 +91,18 @@ leaves a stale link in place.
 The flag parser builds an `args` array and must never expand it empty — `"${args[@]}"`
 under `set -u` on bash 3.2 is an unbound variable, which is why the call is guarded by a
 length check rather than expanded directly.
+
+## The numbered menu
+
+`parse_menu_selection` turns whatever was typed at the prompt into numbers: commas and
+spaces mix, ranges expand, and everything is emitted as tagged lines (`n <number>`,
+`x <token>`) so the caller can toggle and report in one pass. It never fails — the
+rejects are output, not an exit code, because the bug being fixed was a menu that read
+`^[0-9]+$` and let every other keystroke fall through the `case` without a word.
+
+Keep it a pure function of its two arguments. That is what lets the smoke tests source
+the script and exercise it directly, which matters because CI runners ship fzf and never
+reach the menu at all.
 
 ## Rendering
 

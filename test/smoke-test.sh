@@ -706,6 +706,82 @@ else
 fi
 
 echo ""
+echo "Menu input"
+# The numbered menu took exactly one number and dropped everything else on the
+# floor without a word. The parser is exercised directly — sourcing the script
+# reaches it whether or not fzf is installed, and on a CI runner it usually is,
+# which would skip the menu entirely.
+assert_menu() {
+  local input="$1" total="$2" expected="$3" desc="$4"
+  local got
+  got=$( ( . "$MANAGE_SKILLS" --version >/dev/null 2>&1; parse_menu_selection "$input" "$total" ) | tr '\n' ' ' || true )
+  got="${got% }"
+  if [ "$got" = "$expected" ]; then
+    pass "$desc"
+  else
+    fail "$desc" "expected [$expected], got [$got]"
+  fi
+}
+
+assert_menu "3" 10 "n 3" "menu: a single number still works"
+assert_menu "1,3,5" 10 "n 1 n 3 n 5" "menu: commas separate"
+assert_menu "1 3 5" 10 "n 1 n 3 n 5" "menu: spaces separate"
+assert_menu "1, 4-6 9" 10 "n 1 n 4 n 5 n 6 n 9" "menu: commas, spaces and ranges mix"
+assert_menu "2-6" 10 "n 2 n 3 n 4 n 5 n 6" "menu: a range expands in order"
+# Rejects are reported rather than swallowed, and never stop the numbers
+# around them from being applied.
+assert_menu "1,foo,3" 10 "n 1 x foo n 3" "menu: a bad token is reported, the rest still counts"
+assert_menu "99" 10 "x 99" "menu: out of range is rejected"
+assert_menu "7-3" 10 "x 7-3" "menu: a backwards range is rejected"
+assert_menu "-5" 10 "x -5" "menu: a leading dash is rejected"
+assert_menu "5-" 10 "x 5-" "menu: a trailing dash is rejected"
+# Without 10# this is octal, and 08 is a fatal arithmetic error under set -e
+# rather than a number.
+assert_menu "08" 10 "n 8" "menu: a leading zero is a number, not octal"
+assert_menu "" 10 "" "menu: empty input does nothing"
+
+# End to end, but only where the menu is actually reached.
+if ! command -v fzf >/dev/null 2>&1; then
+  MENU_SRC="$TMPDIR_BASE/menu-src"
+  for n in menu-alpha menu-bravo menu-charlie; do
+    mkdir -p "$MENU_SRC/$n"
+    echo "# $n" > "$MENU_SRC/$n/SKILL.md"
+  done
+  MENU_PROJECT="$TMPDIR_BASE/menu-project"
+  mkdir -p "$MENU_PROJECT"
+  # Its own config: the menu numbers every skill from every source, so a test
+  # that types "1" has to know exactly what is in the list.
+  MENU_HOME_SAVED="$MANAGE_SKILLS_HOME"
+  export MANAGE_SKILLS_HOME="$TMPDIR_BASE/menu-home"
+  "$MANAGE_SKILLS" init >/dev/null 2>&1
+  "$MANAGE_SKILLS" sources add "$MENU_SRC" >/dev/null 2>&1
+  cd "$MENU_PROJECT"
+
+  printf '1,3\na\n' | "$MANAGE_SKILLS" >/dev/null 2>&1 || true
+  if [ -f "$MENU_PROJECT/.claude/skills/menu-alpha/SKILL.md" ] &&
+     [ -f "$MENU_PROJECT/.claude/skills/menu-charlie/SKILL.md" ] &&
+     [ ! -f "$MENU_PROJECT/.claude/skills/menu-bravo/SKILL.md" ]; then
+    pass "menu: 1,3 links the first and third and leaves the second"
+  else
+    fail "menu: 1,3 links the first and third and leaves the second" \
+      "$(ls "$MENU_PROJECT/.claude/skills" 2>/dev/null | tr '\n' ' ')"
+  fi
+
+  # The same numbers again toggle back off — toggling is toggling.
+  printf '1 3\na\n' | "$MANAGE_SKILLS" >/dev/null 2>&1 || true
+  if [ ! -f "$MENU_PROJECT/.claude/skills/menu-alpha/SKILL.md" ]; then
+    pass "menu: the same numbers toggle back off"
+  else
+    fail "menu: the same numbers toggle back off"
+  fi
+
+  export MANAGE_SKILLS_HOME="$MENU_HOME_SAVED"
+  cd "$PROJECT_DIR"
+else
+  echo "  skip  menu end to end (fzf present, the numbered menu is not reached)"
+fi
+
+echo ""
 echo "Packaging consistency"
 # The version lives in the script and the plugin manifest; the release
 # workflow bumps both.

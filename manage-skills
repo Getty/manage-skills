@@ -1688,6 +1688,43 @@ _interactive_fzf() {
   done
 }
 
+# Numbers, however they are typed: `3`, `1,3,5`, `1 3 5`, `1, 4-6 9`. Commas
+# and spaces mix freely because there is no reason to make someone remember
+# which one this menu wanted.
+#
+# Every number toggles. A repeat toggles twice and lands back where it started
+# — toggling is toggling, and anything else would be guessing at intent.
+#
+# Emits one line per resolved number (`n <number>`, ranges expanded, in the
+# order given) and one per token it could not use (`x <token>`). Never fails:
+# a menu that silently swallows a typo is the thing being fixed here, so the
+# caller gets the rejects to show rather than an exit code to check.
+parse_menu_selection() {
+  local input total token lo hi n
+  input="$1"
+  total="$2"
+  # Unquoted on purpose — this is where the splitting happens.
+  for token in ${input//,/ }; do
+    case "$token" in
+      '')                              continue ;;
+      *[!0-9-]* | -* | *- | *-*-*)     echo "x $token"; continue ;;
+      *-*) lo="${token%%-*}"; hi="${token##*-}" ;;
+      *)   lo="$token"; hi="$token" ;;
+    esac
+    # A typed 08 is read as octal without 10#, and that is a fatal arithmetic
+    # error under set -e rather than a rejected token.
+    lo=$((10#$lo))
+    hi=$((10#$hi))
+    if (( lo < 1 || hi > total || lo > hi )); then
+      echo "x $token"
+      continue
+    fi
+    for ((n = lo; n <= hi; n++)); do
+      echo "n $n"
+    done
+  done
+}
+
 _interactive_basic() {
   local target_name="$1" target_path="$2" target_file="$3" project_skills_dir="$4"
 
@@ -1712,8 +1749,9 @@ _interactive_basic() {
   done < <(discover_skills "$target_file")
 
   local -a original_states=("${states[@]}")
-  local width
+  local width notice
   width=$(term_width)
+  notice=""
 
   while true; do
     clear 2>/dev/null || true
@@ -1743,7 +1781,8 @@ _interactive_basic() {
     [[ -n "$buf" ]] && printf '%s' "$buf" | print_grid "$width"
 
     echo ""
-    echo "${DIM}Enter number to toggle, 'a' to apply changes, 'q' to quit${RESET}"
+    [[ -n "$notice" ]] && echo "  ${YELLOW}ignored:${RESET}$notice"
+    echo "${DIM}Numbers toggle — 3, or 1 3 5, or 1,4-6.  'a' apply, 'q' quit${RESET}"
     read -rp "> " input
 
     case "$input" in
@@ -1761,14 +1800,21 @@ _interactive_basic() {
         return
         ;;
       *)
-        if [[ "$input" =~ ^[0-9]+$ ]] && (( input >= 1 && input <= ${#names[@]} )); then
-          local idx=$((input - 1))
-          if [[ "${states[$idx]}" == "[*]" ]]; then
-            states[$idx]="[ ]"
-          else
-            states[$idx]="[*]"
-          fi
-        fi
+        local kind value idx
+        notice=""
+        while read -r kind value; do
+          case "$kind" in
+            n)
+              idx=$((value - 1))
+              if [[ "${states[$idx]}" == "[*]" ]]; then
+                states[$idx]="[ ]"
+              else
+                states[$idx]="[*]"
+              fi
+              ;;
+            x) notice="$notice $value" ;;
+          esac
+        done < <(parse_menu_selection "$input" "$total")
         ;;
     esac
   done

@@ -142,6 +142,26 @@ Every command takes `--target <name>` (default: `claude`).
 | `[ ]` | Available in a source, not in this project |
 | `●` | Original — this project is the source of truth |
 
+### Interactive mode
+
+`manage-skills` with no arguments opens a picker. With [fzf](https://github.com/junegunn/fzf)
+installed you get fuzzy search and multi-select on Tab; without it, a numbered menu:
+
+```
+~/dev/shared-skills
+  1) [*] cilium         3) [ ] gpu-nvidia      5) [ ] rke2
+  2) [ ] github-cli     4) [*] prometheus      6) [ ] terraform-core
+
+Numbers toggle — 3, or 1 3 5, or 1,4-6.  'a' apply, 'q' quit
+> 1,4-6
+```
+
+Commas and spaces mix freely, and ranges work, because there is no reason to make
+anyone remember which one this menu wanted. Every number toggles, so typing one twice
+lands back where it started. Anything that isn't a number in range is listed as
+`ignored:` under the menu rather than silently dropped — the numbers around it still
+apply. Nothing touches the disk until `a`.
+
 ## How It Works
 
 ### Source directories
