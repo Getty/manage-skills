@@ -61,6 +61,18 @@ inode() {
   stat -c %i "$1" 2>/dev/null || stat -f %i "$1" 2>/dev/null
 }
 
+assert_output_lacks() {
+  local pattern="$1" desc="$2"
+  shift 2
+  local output
+  output=$("$@" 2>&1) || true
+  if echo "$output" | grep -qF -- "$pattern"; then
+    fail "$desc" "output unexpectedly contains '$pattern'"
+  else
+    pass "$desc"
+  fi
+}
+
 assert_output_matches() {
   local pattern="$1" desc="$2"
   shift 2
@@ -573,6 +585,8 @@ fi
 
 assert_output_contains "0 copies" "companions: check is clean when everything is linked" \
   "$MANAGE_SKILLS" check
+assert_output_lacks "the source does not have" \
+  "companions: a fully linked skill reports no strays" "$MANAGE_SKILLS" check
 
 # A file added upstream after the skill was linked reaches the project through
 # link and through sync alike — neither may need an unlink first.
@@ -617,6 +631,56 @@ if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md" 2>/dev/
   pass "companions: --force wins over a diverged companion"
 else
   fail "companions: --force wins over a diverged companion"
+fi
+
+# Files only the project has. Two ways in: somebody added one to the linked
+# copy, or the source dropped one and it was left behind on purpose. Neither
+# is something sync can resolve — a file the source never had is the only copy
+# of itself — so the job here is to name it, not to act on it.
+echo "my own notes" > "$PROJECT_DIR/.claude/skills/deep-skill/notes.md"
+assert_output_contains "the source does not have" \
+  "strays: check reports a file the source does not have" "$MANAGE_SKILLS" check
+assert_output_matches "^ +notes\.md$" \
+  "strays: check names the file by its path inside the skill" "$MANAGE_SKILLS" check
+assert_output_contains "the source does not have" \
+  "strays: sync reports it too" "$MANAGE_SKILLS" sync
+if [ -f "$PROJECT_DIR/.claude/skills/deep-skill/notes.md" ]; then
+  pass "strays: sync leaves it alone"
+else
+  fail "strays: sync leaves it alone"
+fi
+
+# unlink is an rm -rf over the whole directory, so a stray is exactly what it
+# must not take with it silently.
+assert_exit 1 "strays: unlink refuses while a stray is present" \
+  "$MANAGE_SKILLS" unlink deep-skill
+if [ -f "$PROJECT_DIR/.claude/skills/deep-skill/notes.md" ]; then
+  pass "strays: the refused unlink kept it"
+else
+  fail "strays: the refused unlink kept it"
+fi
+
+rm -f "$PROJECT_DIR/.claude/skills/deep-skill/notes.md"
+assert_output_contains "0 copies" "strays: check is clean once it is gone" \
+  "$MANAGE_SKILLS" check
+
+# A companion dropped upstream is kept rather than deleted, which is right —
+# but it used to leave no trace at all, so nobody could tell a deliberate
+# local file apart from one whose source had moved on.
+rm -f "$COMPANION_SRC/deep-skill/templates/thing.txt"
+assert_output_contains "thing.txt" \
+  "strays: a companion dropped upstream is reported" "$MANAGE_SKILLS" check
+if [ -f "$PROJECT_DIR/.claude/skills/deep-skill/templates/thing.txt" ]; then
+  pass "strays: the dropped companion is not deleted"
+else
+  fail "strays: the dropped companion is not deleted"
+fi
+assert_exit 0 "strays: unlink --force removes the skill anyway" \
+  "$MANAGE_SKILLS" unlink deep-skill --force
+if [ -d "$PROJECT_DIR/.claude/skills/deep-skill" ]; then
+  fail "strays: --force removed the directory"
+else
+  pass "strays: --force removed the directory"
 fi
 
 "$MANAGE_SKILLS" unlink deep-skill >/dev/null 2>&1 || true

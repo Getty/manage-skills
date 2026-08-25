@@ -76,6 +76,18 @@ is kept and reported rather than overwritten (`--force` still wins), and a compa
 that vanished upstream is left behind rather than deleted, because a project may still
 be using it.
 
+That second rule was silent, which made it indistinguishable from a bug. A file in the
+project that no source has a counterpart for — `stray_companion_files` — is now named by
+`check` and by `sync`, and it is the one state neither of them can resolve: relinking
+needs something to relink to. Two very different things arrive in that state, and the
+file cannot say which it is, so neither does the tool — somebody added a note to the
+linked copy, or a source dropped a file that this project still uses. Both want a person,
+which is why the paths are printed rather than counted.
+
+`unlink` gets the same treatment for a harder reason: it is an `rm -rf` over the whole
+directory, so a stray is precisely the file it would destroy the only copy of. It refuses
+and names them; `--force` drops them, matching what the flag already means for `sync`.
+
 ## Sync is content-aware
 
 `sync` relinks a copy only when it reads exactly like its source. A copy whose content

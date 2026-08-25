@@ -117,7 +117,7 @@ manage-skills                         # …or pick interactively
 | `manage-skills list` | All skills with their link status, grouped by source |
 | `manage-skills locations` | Where skills come from, per source |
 | `manage-skills link <skill>…` | Hardlink skills into the current project |
-| `manage-skills unlink <skill>…` | Remove skills from the current project |
+| `manage-skills unlink <skill>…` | Remove skills from the current project (`--force` also drops files no source has) |
 | `manage-skills sync` | Re-hardlink any skill that became a plain copy |
 | `manage-skills update [name…]` | Pull remote sources; `--check` only reports |
 | `manage-skills package [dir]` | Make a skill directory installable by others |
@@ -232,6 +232,35 @@ common case, where an `Edit` detached the inode without changing a word, and not
 be lost. A copy that reads *differently* is somebody's work, so it stays and gets named.
 `sync --force` is the deliberate override, for once the change has been taken upstream or
 discarded.
+
+### Files only the project has
+
+A skill directory in a project can end up holding a file that no source has a copy of.
+It happens two ways, and the file cannot tell you which: somebody added it to the linked
+copy, or a source dropped a file that this project still has. `check` and `sync` name
+those files:
+
+```
+$ manage-skills check
+  [~] perl-moo  (2 files the source does not have)
+        notes.md
+        references/our-conventions.md
+```
+
+They are reported rather than fixed, because there is nothing to relink them *to* —
+each one is the only copy of itself. Fold it into the source if it belongs to the skill,
+or move it out of the skill directory if it does not.
+
+For the same reason `unlink` stops when it finds one. It is an `rm -rf` over the whole
+directory, so those files are exactly what it would destroy:
+
+```
+$ manage-skills unlink perl-moo
+  perl-moo: kept — 2 files here have no copy in the source
+        notes.md
+        references/our-conventions.md
+  Move out what you need, then rerun — or pass --force to drop them.
+```
 
 And because the divergence is committed, even a forced sync only removes it from the
 working tree, never from the history.

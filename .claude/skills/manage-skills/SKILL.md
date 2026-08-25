@@ -21,6 +21,7 @@ manage-skills list                   # Show all skills with status
 manage-skills locations              # Where skills come from, per source
 manage-skills link <skill>...        # Hardlink skills into current project
 manage-skills unlink <skill>...      # Remove skills from current project
+manage-skills unlink <skill> --force # …even if it holds files no source has
 manage-skills sync                   # Re-hardlink stale copies (keeps diverged ones)
 manage-skills sync --force           # …and relink the diverged ones too
 manage-skills update [name...]       # Pull remote sources (--check only reports)
@@ -64,9 +65,15 @@ curl -fsSL https://raw.githubusercontent.com/Getty/manage-skills/main/install.sh
 ## Status Icons
 
 - `[*]` — hardlinked from source (in sync)
-- `[~]` — local copy, not a hardlink (drifted)
+- `[~]` — local copy, not a hardlink (drifted), or holding files no source has
 - `[ ]` — available but not linked
 - `●` — original, this project is the source of truth
+
+`check` and `sync` name any file in a project's skill directory that no source has a
+copy of — one somebody added here, or one a source dropped while this project kept it.
+Nothing can relink those, so they are reported and left alone; fold one into the source
+if it belongs to the skill, or move it out if it does not. `unlink` refuses to `rm -rf`
+over them unless `--force` says so.
 
 On a terminal, `list` and `locations` group skills by source and lay each group out in
 columns. Piped output stays one skill per line, so `manage-skills list | grep …` works.

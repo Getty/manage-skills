@@ -551,6 +551,57 @@ check_companion_files() {
   done < <(skill_companion_files "$source_skill_dir" "$target_file")
 }
 
+# Relative paths of files in the project's copy of a skill that the source has
+# no counterpart for, the entry file aside. Two ways in, and the tool cannot
+# tell them apart: somebody added a file to the linked copy, or the source
+# dropped one and link_companion_files left it behind on purpose.
+#
+# Neither is something sync can resolve. A file no source has is the only copy
+# of itself, so the whole answer here is to name it and let a person look.
+stray_companion_files() {
+  # Trailing slashes are stripped because cmd_check's `for dir in .../*/` glob
+  # supplies one. Left on, the `${f#$dest_skill_dir/}` below never matches and
+  # every file in the skill is reported as a stray under its absolute path.
+  local source_skill_dir="${1%/}"
+  local dest_skill_dir="${2%/}"
+  local target_file="$3"
+  local f rel
+  [[ -d "$dest_skill_dir" ]] || return 0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    rel="${f#$dest_skill_dir/}"
+    if [[ "$rel" != "$target_file" ]] && [[ ! -f "$source_skill_dir/$rel" ]]; then
+      echo "$rel"
+    fi
+  done < <(find "$dest_skill_dir" -type f 2>/dev/null | LC_ALL=C sort)
+}
+
+# Collects them in one walk, reporting through two globals rather than stdout,
+# because the count is needed before the names can be printed under a heading:
+# companions_stray and stray_files (one relative path per line).
+collect_stray_companions() {
+  local source_skill_dir="$1"
+  local dest_skill_dir="$2"
+  local target_file="$3"
+  local rel
+  companions_stray=0
+  stray_files=""
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    companions_stray=$((companions_stray + 1))
+    stray_files="$stray_files$rel"$'\n'
+  done < <(stray_companion_files "$source_skill_dir" "$dest_skill_dir" "$target_file")
+}
+
+# Prints the collected stray paths, indented under their skill's line.
+print_stray_files() {
+  local rel
+  printf '%s' "$stray_files" | while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    echo "        ${DIM}$rel${RESET}"
+  done
+}
+
 # ── Layout ───────────────────────────────────────────────────────────
 
 term_width() {
@@ -1418,6 +1469,7 @@ cmd_link() {
 
 cmd_unlink() {
   local target_name="claude"
+  local force=false
   local skills=()
 
   while [[ $# -gt 0 ]]; do
@@ -1425,6 +1477,7 @@ cmd_unlink() {
       --target|-t)
         [[ -n "${2:-}" ]] || die "Missing value for $1"
         target_name="$2"; shift 2 ;;
+      --force|-f) force=true; shift ;;
       *) skills+=("$1"); shift ;;
     esac
   done
@@ -1437,15 +1490,46 @@ cmd_unlink() {
   local target_file="${target_info##*:}"
   local project_skills_dir="$PWD/$target_path"
 
+  local discovered
+  discovered=$(discover_skills "$target_file")
+  local refused=0
+
   for skill_name in "${skills[@]}"; do
     local dest_dir="$project_skills_dir/$skill_name"
-    if [[ -d "$dest_dir" ]]; then
-      rm -rf "$dest_dir"
-      echo "  ${RED}unlinked${RESET} $skill_name"
-    else
+    if [[ ! -d "$dest_dir" ]]; then
       warn "$skill_name: not found in project"
+      continue
     fi
+
+    # unlink removes a link, but the implementation is rm -rf over a whole
+    # directory. Anything in there that no source has a copy of goes with it,
+    # and that is the one file in the tree nothing else can restore.
+    if ! $force; then
+      local source_dir=""
+      local entry
+      while IFS= read -r entry; do
+        case "$entry" in
+          *":$skill_name") source_dir="${entry%:*}"; break ;;
+        esac
+      done <<< "$discovered"
+
+      if [[ -n "$source_dir" ]]; then
+        collect_stray_companions "$source_dir/$skill_name" "$dest_dir" "$target_file"
+        if [[ $companions_stray -gt 0 ]]; then
+          warn "$skill_name: kept — $companions_stray files here have no copy in the source"
+          print_stray_files
+          echo "  ${DIM}Move out what you need, then rerun — or pass --force to drop them.${RESET}"
+          refused=$((refused + 1))
+          continue
+        fi
+      fi
+    fi
+
+    rm -rf "$dest_dir"
+    echo "  ${RED}unlinked${RESET} $skill_name"
   done
+
+  [[ $refused -eq 0 ]] || exit 1
 }
 
 cmd_sync() {
@@ -1470,7 +1554,7 @@ cmd_sync() {
   local target_path="${target_info%%:*}"
   local target_file="${target_info##*:}"
   local project_skills_dir="$PWD/$target_path"
-  local fixed=0 ok=0 missing=0 diverged=0
+  local fixed=0 ok=0 missing=0 diverged=0 strays=0
 
   echo "${BOLD}Syncing hardlinks${RESET} ${DIM}(target: $target_name)${RESET}"
 
@@ -1508,13 +1592,31 @@ cmd_sync() {
       echo "  ${YELLOW}diverged${RESET} $skill_name ${DIM}($companions_diverged companion files differ — kept)${RESET}"
       diverged=$((diverged + 1))
     fi
+
+    # Not a sync problem and not fixable by --force: no source holds these, so
+    # relinking is not a thing that could happen. Said here anyway, because
+    # sync is where somebody goes to put a project straight.
+    collect_stray_companions "$source_dir/$skill_name" "$dest_dir" "$target_file"
+    if [[ $companions_stray -gt 0 ]]; then
+      echo "  ${YELLOW}kept${RESET} $skill_name ${DIM}($companions_stray files the source does not have)${RESET}"
+      print_stray_files
+      strays=$((strays + 1))
+    fi
   done < <(discover_skills "$target_file")
 
   echo ""
-  echo "  ${GREEN}$ok${RESET} ok, ${YELLOW}$fixed${RESET} relinked, ${YELLOW}$diverged${RESET} diverged"
+  local summary="  ${GREEN}$ok${RESET} ok, ${YELLOW}$fixed${RESET} relinked, ${YELLOW}$diverged${RESET} diverged"
+  if [[ $strays -gt 0 ]]; then
+    summary="$summary, ${YELLOW}$strays${RESET} with extra files"
+  fi
+  echo "$summary"
   if [[ $diverged -gt 0 ]]; then
     echo "  ${DIM}Diverged copies were kept. Decide whether the change belongs upstream,${RESET}"
     echo "  ${DIM}then rerun with ${BOLD}--force${RESET}${DIM} to relink them.${RESET}"
+  fi
+  if [[ $strays -gt 0 ]]; then
+    echo "  ${DIM}Files listed above exist only here — nothing to relink them to.${RESET}"
+    echo "  ${DIM}Fold them into the source, or move them out of the skill.${RESET}"
   fi
 }
 
@@ -1526,7 +1628,7 @@ cmd_check() {
   local target_path="${target_info%%:*}"
   local target_file="${target_info##*:}"
   local project_skills_dir="$PWD/$target_path"
-  local ok=0 copies=0 originals=0
+  local ok=0 copies=0 originals=0 strays=0
 
   echo "${BOLD}Checking hardlinks${RESET} ${DIM}(target: $target_name)${RESET}"
 
@@ -1553,6 +1655,7 @@ cmd_check() {
     if [[ -n "$source_dir" ]]; then
       local source_file="$source_dir/$skill_name/$target_file"
       check_companion_files "$source_dir/$skill_name" "$skill_dir" "$target_file"
+      collect_stray_companions "$source_dir/$skill_name" "$skill_dir" "$target_file"
       if ! is_hardlinked "$skill_dir/$target_file" "$source_file"; then
         echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(copy, expected hardlink from $source_dir)${RESET}"
         copies=$((copies + 1))
@@ -1561,8 +1664,17 @@ cmd_check() {
         # inside it points at a file this project does not have.
         echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}($companions_unlinked companion files missing or copies)${RESET}"
         copies=$((copies + 1))
-      else
+      elif [[ $companions_stray -eq 0 ]]; then
         ok=$((ok + 1))
+      fi
+
+      # Reported separately from copies, because sync is not the answer: no
+      # source has these, so nothing can relink them. Named, because a count
+      # alone leaves the reader hunting through the directory.
+      if [[ $companions_stray -gt 0 ]]; then
+        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}($companions_stray files the source does not have)${RESET}"
+        print_stray_files
+        strays=$((strays + 1))
       fi
     else
       originals=$((originals + 1))
@@ -1570,10 +1682,18 @@ cmd_check() {
   done
 
   echo ""
-  echo "  ${GREEN}$ok${RESET} linked, ${YELLOW}$copies${RESET} copies, $originals originals"
+  local summary="  ${GREEN}$ok${RESET} linked, ${YELLOW}$copies${RESET} copies, $originals originals"
+  if [[ $strays -gt 0 ]]; then
+    summary="$summary, ${YELLOW}$strays${RESET} with extra files"
+  fi
+  echo "$summary"
   if [[ $copies -gt 0 ]]; then
     echo "  Run ${BOLD}manage-skills sync${RESET} to relink copies"
     echo "  ${DIM}Copies whose content differs are kept; sync names them.${RESET}"
+  fi
+  if [[ $strays -gt 0 ]]; then
+    echo "  ${DIM}Files listed above exist only here. Fold them into the source if they${RESET}"
+    echo "  ${DIM}belong to the skill, or move them out of it if they do not.${RESET}"
   fi
 }
 
@@ -1831,6 +1951,7 @@ ${BOLD}USAGE${RESET}
   manage-skills locations          Show where skills come from, per source
   manage-skills link <skill>...    Hardlink skills into current project
   manage-skills unlink <skill>...  Remove skills from current project
+                                   (--force also drops files no source has)
   manage-skills sync [--force]     Re-hardlink stale copies (--force also
                                    relinks copies whose content diverged)
   manage-skills update [name...]   Pull remote sources (--check only reports)
