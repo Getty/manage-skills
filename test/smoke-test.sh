@@ -482,6 +482,26 @@ assert_output_contains "manage-skills" "self status names the script" "$MANAGE_S
 assert_exit 0 "self install registers the shipped skills" "$MANAGE_SKILLS" self install
 assert_output_contains "registered as a source" "self status confirms registration" "$MANAGE_SKILLS" self
 assert_exit 1 "unknown self subcommand fails" "$MANAGE_SKILLS" self bogus
+# Regression: the registration check was `read_sources | grep -qxF`, and
+# `grep -q` exits at its first match. `read_sources` then dies of SIGPIPE on
+# its next write, `pipefail` propagates that 141, and the whole pipeline reads
+# false — so a registered source was only ever *seen* when it happened to be
+# the last line of the config. `self install` appends, which is why the tests
+# above never caught it. Put another source behind it and both branches flip.
+TRAILING_SRC="$TMPDIR_BASE/trailing-source"
+mkdir -p "$TRAILING_SRC"
+"$MANAGE_SKILLS" sources add "$TRAILING_SRC" Trailing >/dev/null 2>&1
+assert_output_contains "registered as a source" \
+  "self sees its registration behind a later source" "$MANAGE_SKILLS" self
+assert_output_contains "Already a source" \
+  "self install is idempotent behind a later source" "$MANAGE_SKILLS" self install
+SELF_LINES=$(grep -cxF "$REPO_DIR/.claude/skills   # Shipped with manage-skills" "$MANAGE_SKILLS_HOME/sources" || true)
+if [ "$SELF_LINES" -eq 1 ]; then
+  pass "self install writes no duplicate source line"
+else
+  fail "self install writes no duplicate source line" "found $SELF_LINES copies of the shipped-skills line"
+fi
+"$MANAGE_SKILLS" sources remove "$TRAILING_SRC" >/dev/null 2>&1
 # Regression: `shorten` used "${1//$HOME/\~}", and bash 3.2 keeps that
 # backslash. The literal \~ was written into the config, never expanded back,
 # and the registered source silently vanished — macOS only.
@@ -496,6 +516,76 @@ case "$SELF_OUT" in
   *)      pass "shorten emits a bare tilde" ;;
 esac
 "$MANAGE_SKILLS" sources remove "$REPO_DIR/.claude/skills" >/dev/null 2>&1
+
+echo ""
+echo "Self across install routes"
+# A plugin lives at a versioned cache path — `.../manage-skills/<version>/`. That
+# version is in the path, so registering it as a source registers a directory the
+# next `/plugin update` deletes: the source vanishes silently (read_source_lines
+# drops what does not exist) and every project linked to it keeps hardlinks into a
+# version nobody updates any more. The stable answer is the one remote sources
+# already use — materialise into sources.d/ and register *that*.
+PLUGIN_ROOT="$TMPDIR_BASE/plugins/cache/vendor/manage-skills/9.9.9"
+mkdir -p "$PLUGIN_ROOT/.claude/skills/manage-skills"
+cp "$MANAGE_SKILLS" "$PLUGIN_ROOT/manage-skills"
+printf -- '---\nname: manage-skills\ndescription: shipped\n---\n# shipped\n' \
+  > "$PLUGIN_ROOT/.claude/skills/manage-skills/SKILL.md"
+assert_output_contains "(plugin)" "self detects a plugin install" "$PLUGIN_ROOT/manage-skills" self
+"$PLUGIN_ROOT/manage-skills" self install >/dev/null 2>&1 || true
+if grep -qF "$PLUGIN_ROOT" "$MANAGE_SKILLS_HOME/sources"; then
+  fail "self install registers no versioned plugin path" \
+       "sources names the cache path, which the next plugin update deletes"
+else
+  pass "self install registers no versioned plugin path"
+fi
+if [ -f "$MANAGE_SKILLS_HOME/sources.d/manage-skills/manage-skills/SKILL.md" ]; then
+  pass "self install materialises the shipped skills into sources.d"
+else
+  fail "self install materialises the shipped skills into sources.d" \
+       "sources.d/manage-skills/ holds no skills"
+fi
+assert_output_contains "manage-skills" "the materialised source provides the skill" \
+  "$MANAGE_SKILLS" list
+"$MANAGE_SKILLS" sources remove "$MANAGE_SKILLS_HOME/sources.d/manage-skills" >/dev/null 2>&1 || true
+# `/plugin update` puts new files in a new cache directory; sources.d still
+# holds the old ones until something copies them across. Telling the user only
+# half of that leaves the materialised source frozen at the version they
+# installed.
+assert_output_contains "self install" "self update tells a plugin how to refresh sources.d" \
+  "$PLUGIN_ROOT/manage-skills" self update
+
+# Two installs on PATH age independently — a stale one answers `manage-skills`
+# while `self` reports the version of whichever copy the user happened to run.
+# The one thing that makes that visible is naming the others.
+OTHER_BIN="$TMPDIR_BASE/other-bin"
+mkdir -p "$OTHER_BIN"
+printf '#!/usr/bin/env bash\nVERSION="0.0.1"\necho "manage-skills $VERSION"\n' \
+  > "$OTHER_BIN/manage-skills"
+chmod +x "$OTHER_BIN/manage-skills"
+SELF_PATH_OUT=$(PATH="$OTHER_BIN:$PATH" "$MANAGE_SKILLS" self 2>&1)
+case "$SELF_PATH_OUT" in
+  *"$OTHER_BIN"*) pass "self names another install found on PATH" ;;
+  *) fail "self names another install found on PATH" "output does not mention $OTHER_BIN" ;;
+esac
+case "$SELF_PATH_OUT" in
+  *0.0.1*) pass "self reports the other install's version" ;;
+  *) fail "self reports the other install's version" "output carries no 0.0.1" ;;
+esac
+
+# A local source whose directory is gone is not a remote that was never fetched.
+# Sending the user to `update` for it is advice that cannot work.
+printf '%s   # Gone\n' "$TMPDIR_BASE/no-such-source" >> "$MANAGE_SKILLS_HOME/sources"
+SRC_OUT=$("$MANAGE_SKILLS" sources 2>&1)
+case "$SRC_OUT" in
+  *"no-such-source"*"not fetched"*) fail "a missing local source is not called unfetched" \
+       "a local directory is reported with the remote wording" ;;
+  *) pass "a missing local source is not called unfetched" ;;
+esac
+case "$SRC_OUT" in
+  *"no-such-source"*) pass "a missing local source is still listed" ;;
+  *) fail "a missing local source is still listed" "the line vanished from the listing" ;;
+esac
+"$MANAGE_SKILLS" sources remove "$TMPDIR_BASE/no-such-source" >/dev/null 2>&1 || true
 
 echo ""
 echo "Package"
