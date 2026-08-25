@@ -134,6 +134,20 @@ read_sources() {
   done < <(read_source_lines)
 }
 
+# True when one of the configured sources resolves to exactly this path. Not a
+# pipeline on purpose: `read_sources | grep -qxF` reads as the same test, but
+# grep exits at its first match, read_sources dies of SIGPIPE writing the line
+# after it, and `pipefail` hands the whole test that 141. Every source but the
+# last one then reads as unregistered.
+source_path_registered() {
+  local wanted path
+  wanted="$1"
+  while IFS= read -r path; do
+    [[ "$path" == "$wanted" ]] && return 0
+  done < <(read_sources)
+  return 1
+}
+
 # All skills a source directory provides, in glob order, without dedup.
 list_source_skills() {
   local source_dir="$1" target_file="${2:-SKILL.md}"
@@ -353,9 +367,13 @@ require_git() {
 # Mirrors the cache checkout into the linked copy without breaking inodes:
 # existing files are overwritten in place, new ones copied, and files that
 # vanished upstream are reported rather than deleted.
+# A third argument overrides where the files come from. Remote sources pass
+# nothing and get their git checkout; a plugin install passes its own skill
+# directory, because the copy that lands in sources.d is what makes the
+# registered path survive the next update.
 remote_materialise() {
   local name="$1" target_file="${2:-SKILL.md}"
-  local cache="$CACHE_DIR/$name" live="$SOURCES_DIR/$name"
+  local cache="${3:-$CACHE_DIR/$name}" live="$SOURCES_DIR/$name"
   local skill_dirs
   skill_dirs=$(skill_dirs_in "$cache" "$target_file") \
     || die "$name: no skills found in the checkout"
@@ -723,7 +741,14 @@ cmd_sources() {
           count=$(list_source_skills "$expanded" | wc -l | tr -d ' ')
           echo "  ${GREEN}●${RESET} $SOURCE_PATH  ${DIM}($count skills$kind)$note${RESET}"
         else
-          echo "  ${RED}●${RESET} $SOURCE_PATH  ${DIM}(not fetched — run: manage-skills update)$note${RESET}"
+          # "not fetched" is advice for a remote that was never cloned. A local
+          # directory that is gone cannot be fetched by anything, and sending
+          # the user to `update` for it is advice that cannot work.
+          if is_remote_spec "$SOURCE_PATH"; then
+            echo "  ${RED}●${RESET} $SOURCE_PATH  ${DIM}(not fetched — run: manage-skills update)$note${RESET}"
+          else
+            echo "  ${RED}●${RESET} $SOURCE_PATH  ${DIM}(directory not found)$note${RESET}"
+          fi
         fi
       done < "$SOURCES_FILE"
       ;;
@@ -1311,6 +1336,48 @@ self_skills_dir() {
   return 1
 }
 
+# Every other manage-skills on PATH, one "<path>\t<version>" per line. Two
+# installs age independently — a plugin cache three releases behind still answers
+# `manage-skills` while `self` reports whichever copy the user happened to run —
+# and naming them is the only thing that makes that visible. The version is read
+# out of the file rather than asked for: `self` is a diagnostic, and running a
+# stranger's script to diagnose a PATH problem is the wrong trade.
+other_installs_on_path() {
+  local mine seen dir cand real ver
+  mine="$1"
+  seen=""
+  local OLDIFS="$IFS"
+  IFS=:
+  set -f
+  for dir in $PATH; do
+    IFS="$OLDIFS"
+    set +f
+    [[ -n "$dir" && -f "$dir/manage-skills" && -x "$dir/manage-skills" ]] || { IFS=:; set -f; continue; }
+    cand="$dir/manage-skills"
+    real=$(cd -P "$(dirname "$cand")" 2>/dev/null && pwd)/manage-skills
+    while [[ -L "$real" ]]; do
+      local link
+      link=$(readlink "$real")
+      [[ "$link" != /* ]] && link="$(dirname "$real")/$link"
+      real=$(cd -P "$(dirname "$link")" 2>/dev/null && pwd)/$(basename "$link")
+    done
+    if [[ "$real" != "$mine" ]]; then
+      case " $seen " in
+        *" $real "*) ;;
+        *)
+          seen="$seen $real"
+          ver=$(sed -n 's/^VERSION="\{0,1\}\([0-9][0-9.]*\)"\{0,1\}.*/\1/p' "$real" 2>/dev/null | head -1)
+          printf '%s\t%s\n' "$cand" "${ver:-unknown}"
+          ;;
+      esac
+    fi
+    IFS=:
+    set -f
+  done
+  IFS="$OLDIFS"
+  set +f
+}
+
 cmd_self() {
   local subcmd="${1:-status}"
   shift 2>/dev/null || true
@@ -1327,13 +1394,35 @@ cmd_self() {
       echo "  config    $(shorten "$CONFIG_DIR")"
       if [[ -n "$skills_dir" ]]; then
         echo "  skills    $(shorten "$skills_dir")  ${DIM}($(list_source_skills "$skills_dir" | wc -l | tr -d ' ') shipped)${RESET}"
-        if read_sources | grep -qxF "$skills_dir"; then
+        if source_path_registered "$skills_dir"; then
           echo "            ${GREEN}registered as a source${RESET}"
         else
           echo "            ${YELLOW}not registered${RESET} — run: manage-skills self install"
         fi
       else
         echo "  skills    ${YELLOW}not present${RESET} — run: manage-skills self install"
+      fi
+      # Another copy on PATH is the failure that looks like no failure: it
+      # answers `manage-skills`, it reports its own version when asked, and
+      # nothing connects the two. Name it here or it stays invisible.
+      local others other_path other_ver stale=false
+      others=$(other_installs_on_path "$script_path")
+      if [[ -n "$others" ]]; then
+        echo "  also on PATH"
+        while IFS=$'\t' read -r other_path other_ver; do
+          [[ -n "$other_path" ]] || continue
+          if [[ "$other_ver" != "$VERSION" ]]; then
+            stale=true
+            echo "            $(shorten "$other_path")  ${YELLOW}($other_ver)${RESET}"
+          else
+            echo "            $(shorten "$other_path")  ${DIM}($other_ver)${RESET}"
+          fi
+        done <<EOF
+$others
+EOF
+        if $stale; then
+          echo "            ${YELLOW}versions differ${RESET} — whichever comes first on PATH wins"
+        fi
       fi
       ;;
     install)
@@ -1343,8 +1432,19 @@ cmd_self() {
         info "Fetching shipped skills from $SELF_REPO"
         remote_add "github:$SELF_REPO"
         skills_dir="$SOURCES_DIR/$(remote_name "github:$SELF_REPO")"
+      elif [[ "$kind" == "plugin" ]]; then
+        # A plugin lives under .../manage-skills/<version>/, so registering that
+        # path registers a directory the next `/plugin update` deletes: the
+        # source disappears without a word, and every project linked to it holds
+        # hardlinks into a version nobody maintains. Copy into sources.d instead
+        # — the stable path remote sources already use — and register that. The
+        # copy goes through `cat >`, so a later update reaches linked projects
+        # in place, exactly as `update` does for a remote.
+        info "Copying the shipped skills into $(shorten "$SOURCES_DIR/manage-skills")"
+        remote_materialise "manage-skills" "SKILL.md" "$skills_dir" >/dev/null
+        skills_dir="$SOURCES_DIR/manage-skills"
       fi
-      if read_sources | grep -qxF "$skills_dir"; then
+      if source_path_registered "$skills_dir"; then
         info "Already a source: $(shorten "$skills_dir")"
       else
         # Appended, so it stays lowest priority — your own skills win.
@@ -1368,6 +1468,12 @@ cmd_self() {
         plugin)
           info "Installed as a Claude Code plugin — update it from Claude Code:"
           echo "  /plugin update manage-skills"
+          # The update lands in a new versioned cache directory. Whatever was
+          # copied into sources.d stays on the old content until this runs
+          # again, so the second line is not optional advice.
+          if [[ -d "$SOURCES_DIR/manage-skills" ]]; then
+            echo "  manage-skills self install   ${DIM}# then, to copy the new skills across${RESET}"
+          fi
           ;;
         standalone)
           local tmp url

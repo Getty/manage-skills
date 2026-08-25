@@ -127,7 +127,7 @@ manage-skills                         # …or pick interactively
 | `manage-skills sources add <dir\|repo\|owner> [label]` | Add a source — a directory, a git repo, or a GitHub owner (their `skills` repo) |
 | `manage-skills sources remove <dir>` | Remove a source |
 | `manage-skills targets` | List configured targets |
-| `manage-skills self` | Where this install and its own skills live |
+| `manage-skills self` | Where this install and its own skills live, and any other install on `PATH` |
 | `manage-skills self install` | Register the shipped skills as a source |
 | `manage-skills self update` | Update the script and the shipped skills |
 | `manage-skills init` | Create `~/.manage-skills/` |

@@ -124,6 +124,13 @@ on `PATH` and loads both skills:
 /plugin install manage-skills@getty
 ```
 
+Both routes can be active at once, and then they age apart: the plugin cache holds the
+version you installed, the checkout holds whatever you last pulled, and both sit on
+`PATH`. Whichever comes first answers — and a copy that predates a feature reports the
+absence of that feature as "nothing to do", which is how a `sync` comes back clean while
+no skill directory is linked past its `SKILL.md`. `manage-skills self` names every other
+`manage-skills` on `PATH` with its version. **Read that before believing a quiet result.**
+
 ## Remote sources
 
 A source can be a repository instead of a directory:

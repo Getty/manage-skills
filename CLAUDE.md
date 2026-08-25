@@ -32,13 +32,23 @@ rules and the repair recipe live in that skill file.
 
 ## Shell constraints
 
-`set -euo pipefail` is enforced. Three traps follow from it and from the platform floor:
+`set -euo pipefail` is enforced. These traps follow from it and from the platform floor:
 
 **A pipeline inside an assignment aborts the script.** `x=$(echo "$list" | grep foo | cut -d: -f1)`
 dies when `grep` matches nothing: `pipefail` propagates its exit 1 and `set -e` acts on
 it. This shipped as a bug — `check` died in every project that owned a skill of its own,
 leaving its `originals` branch unreachable. Match with a `case` inside a `while read`
 loop instead, as `cmd_check` now does.
+
+**`pipefail` makes a short-circuiting reader lie.** `read_sources | grep -qxF "$path"`
+reads as a membership test, and is one only for the config's last line. `grep -q` exits
+at its first match, the producer dies of SIGPIPE writing the line after it, and
+`pipefail` hands the `if` that 141. `self` therefore called its own shipped skills
+unregistered whenever another source followed them, and `self install` appended a second
+copy of a line already there — an idempotence test caught neither, because `self install`
+appends and the tests never put anything behind it. `source_path_registered` is the same
+test written as a `while read` fed by a process substitution: no pipe, no status to
+propagate. Every early-stopping consumer has this shape — `grep -q`, `grep -m`, `head`.
 
 **Bash 3.2 is the floor** (the system bash on macOS). Index arrays, `while read`, and
 C-style `for ((…))` carry everything here; `declare -A`, `mapfile`, and `readarray` are
@@ -303,6 +313,26 @@ updates depends on how it was installed: a checkout says "git pull", a plugin sa
 "/plugin update", only a standalone copy rewrites itself. That rewrite `exec`s a separate
 shell to overwrite the file, so the running bash never reads a file that is changing
 underneath it.
+
+**A plugin's path carries its version, so it must never be registered as a source.**
+A plugin install sits at `.../plugins/cache/<vendor>/manage-skills/<version>/`, and the
+next `/plugin update` writes the new version to a *different* directory and drops that
+one. A source line naming it therefore stops resolving — silently, because
+`read_source_lines` filters out what does not exist — and every project linked to it is
+left holding hardlinks into a version nobody maintains. `self install` under
+`kind == plugin` copies the skills into `sources.d/manage-skills/` and registers *that*,
+which is the same stable-path trick remote sources use and the same `cat >` write, so a
+later `self install` reaches linked projects in place. `self update` prints that second
+step, because the update alone leaves `sources.d` on the old content.
+
+**Two installs on PATH is the failure that looks like none.** A stale copy answers
+`manage-skills` and truthfully reports its own version; nothing connects it to the one the
+user thinks they are running, and a version that predates a feature reports the absence of
+that feature as "nothing to do" — which is how a `sync` came back clean while no skill
+directory was linked past its entry file. `self` lists every other `manage-skills` on
+`PATH` with its version and says when they differ. The version is read out of the file
+with `sed`, never by running it: `self` is a diagnostic, and executing a stranger's script
+to diagnose a `PATH` problem is the wrong trade.
 
 ## CI and releases
 
