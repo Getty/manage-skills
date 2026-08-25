@@ -1442,7 +1442,7 @@ cmd_link() {
         # a skill that grew a references/ after it was first linked.
         link_companion_files "$source_dir/$skill_name" "$dest_dir" "$target_file" true
         if [[ $companions_linked -gt 0 ]]; then
-          echo "  ${GREEN}linked${RESET} $skill_name ${DIM}($companions_linked companion files)${RESET}"
+          echo "  ${GREEN}linked${RESET} $skill_name ${DIM}(+$companions_linked files)${RESET}"
         else
           info "$skill_name: already linked"
         fi
@@ -1585,11 +1585,11 @@ cmd_sync() {
     # grew a references/ upstream reaches its projects through here.
     link_companion_files "$source_dir/$skill_name" "$dest_dir" "$target_file" "$force"
     if [[ $companions_linked -gt 0 ]]; then
-      echo "  ${GREEN}relinked${RESET} $skill_name ${DIM}($companions_linked companion files)${RESET}"
+      echo "  ${GREEN}relinked${RESET} $skill_name ${DIM}(+$companions_linked files)${RESET}"
       fixed=$((fixed + 1))
     fi
     if [[ $companions_diverged -gt 0 ]]; then
-      echo "  ${YELLOW}diverged${RESET} $skill_name ${DIM}($companions_diverged companion files differ — kept)${RESET}"
+      echo "  ${YELLOW}diverged${RESET} $skill_name ${DIM}($companions_diverged files in it differ — kept)${RESET}"
       diverged=$((diverged + 1))
     fi
 
@@ -1660,9 +1660,9 @@ cmd_check() {
         echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}(copy, expected hardlink from $source_dir)${RESET}"
         copies=$((copies + 1))
       elif [[ $companions_unlinked -gt 0 ]]; then
-        # The entry file is fine, so the skill loads — but a relative link
-        # inside it points at a file this project does not have.
-        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}($companions_unlinked companion files missing or copies)${RESET}"
+        # SKILL.md is fine, so the skill loads at all — but a relative link
+        # inside it points at a file this project never received.
+        echo "  ${YELLOW}[~]${RESET} $skill_name  ${DIM}($companions_unlinked files in it missing or copies)${RESET}"
         copies=$((copies + 1))
       elif [[ $companions_stray -eq 0 ]]; then
         ok=$((ok + 1))

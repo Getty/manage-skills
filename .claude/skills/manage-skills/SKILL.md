@@ -1,17 +1,36 @@
 ---
 name: manage-skills
-description: Use when adding, removing, syncing or checking shared skills, when asking where a skill comes from, or before editing any hardlinked SKILL.md.
+description: Use when adding, removing, syncing or checking shared skills, when asking where a skill comes from, or before editing any file inside a hardlinked skill directory.
 user-invocable: true
 ---
 
 # manage-skills — Hardlink-Based Skill Sharing
 
-CLI tool for managing shared skill files across projects via hardlinks. Config lives in `~/.manage-skills/`.
+CLI tool for sharing whole skill directories across projects via hardlinks. Config lives in `~/.manage-skills/`.
 
-> **⚠️ Editing a linked SKILL.md? Use `cat > file` — NOT the `Edit`/`Write` tools.**
+> **⚠️ Editing any file in a linked skill? Use `cat > file` — NOT the `Edit`/`Write` tools.**
 > They rewrite-and-replace → new inode → silently breaks the hardlink to every other
-> project sharing that file. Full rules + repair in
+> project. Full rules + repair in
 > [Editing hardlinked skills](#editing-hardlinked-skills--do-not-break-the-inode) below.
+
+## What gets linked: the directory
+
+A skill is a **directory**, and the whole directory is what gets hardlinked — `SKILL.md`,
+`references/`, `templates/`, `scripts/`, every regular file in it. Each one shares an
+inode with its counterpart in the source, subdirectories included.
+
+`SKILL.md` is not the linked thing. It is the file that *identifies* a directory as a
+skill, which is why discovery keys on it and why a target definition names it
+(`claude:.claude/skills:SKILL.md`). It gets linked exactly like every other file in the
+directory, with no special status once linking starts.
+
+This matters for the rule below: it applies to **every file in the skill**, not just the
+entry file. A `references/api.md` detaches from its source exactly the way a `SKILL.md`
+does, and just as silently.
+
+A project linked by an older version holds only its `SKILL.md`. `manage-skills sync`
+upgrades it in place — the rest of the directory is hardlinked in, subdirectories and
+all. No unlink, no flag.
 
 ## Commands
 
@@ -205,9 +224,9 @@ manage-skills check
 
 ## Editing hardlinked skills — DO NOT BREAK THE INODE
 
-A hardlinked SKILL.md shares one inode across all linked projects. Tools that **rename-and-replace** on save break the link: the path now points to a fresh inode, the other copies still point to the old one with stale content.
+Every file in a linked skill directory shares one inode with its counterpart in the source, and with every other project that links the skill. Tools that **rename-and-replace** on save break that: the path now points to a fresh inode, and every other copy still points to the old one with stale content.
 
-This applies to **every file in a skill directory**, not just SKILL.md — `references/`, `templates/` and `scripts/` are hardlinked too, and detach exactly the same way.
+`SKILL.md` is not a special case here — `references/`, `templates/` and `scripts/` are hardlinked the same way and detach the same way, without anything appearing to go wrong.
 
 - **Write tool (Claude Code)**: rewrites the file → NEW INODE. Breaks hardlinks.
 - **Most editors with "atomic save"**: write to temp, rename over → NEW INODE. Breaks hardlinks.
@@ -218,10 +237,23 @@ This applies to **every file in a skill directory**, not just SKILL.md — `refe
 
 ### Rules of thumb when editing skills via AI
 
-1. **Always use shell redirect** for hardlinked files: `cat > /path/to/SKILL.md <<'EOF' ... EOF`. Truncates + writes in place → keeps inode.
+1. **Always use shell redirect** for any file in a linked skill: `cat > /path/to/references/api.md <<'EOF' ... EOF`. Truncates + writes in place → keeps inode.
 2. Avoid `Write` AND `Edit` tools on hardlinked files — both rewrite-and-replace.
 3. Verify after every change: `stat -c '%i %h' path` — both inode and linkcount must match pre-edit values.
 4. If linkcount dropped to 1, the link is broken — repair before continuing (see below).
+
+### Breaking it on the source side reads as someone else's edit
+
+The rules above are usually applied to a skill *inside a project*. Doing it to the
+**source** is worse, and the report it produces is misleading: the source becomes a new
+inode with new content, every project still holds the old one, and `sync` sees two files
+with two inodes and different content — the same shape a deliberate local edit makes. It
+reports every one of those projects as `diverged` and keeps them, so a change made once
+upstream now needs `sync --force` in each project instead of already being there.
+
+Nothing on disk tells the two apart. The project's git history does: a copy that really
+diverged has a commit that changed it. Editing the source in place avoids the question
+entirely — that is the whole point of the rule.
 
 ### Repairing a broken hardlink chain
 

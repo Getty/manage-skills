@@ -71,6 +71,22 @@ and treat every file in it the same way: hardlinked on link, relinked on sync, c
 on check. `remote_materialise` copies them across with the same `cat >` truncation, so
 a project hardlinked to a reference file follows an `update` in place.
 
+Projects linked by an older version hold their `SKILL.md` and nothing else, so `sync` has
+to be the upgrade path — it links the rest of the directory in, recreating subdirectories
+the project never had, with no unlink and no flag. `link` does the same for anyone who
+reaches for that instead. Both are covered by the "upgrade" smoke tests; that migration
+is most of the installed base, so a regression there is worse than a regression in
+first-time linking.
+
+**Say "the skill directory is hardlinked", never "the hardlinked SKILL.md".** The entry
+file is what *identifies* a skill, and it is linked like every other file in the
+directory — it has no other special status, and describing it as the linked thing is what
+made the missing companions invisible for as long as they were. That holds for the README,
+the shipped skill, this file, the help text, and the strings the commands print: the
+output says "files in it", not "companion files", because a reader who thinks the rest of
+the directory is optional will not think to check on it. `companion` survives in function
+names only, where it usefully means "the files other than the entry file".
+
 Two rules carried over from `SKILL.md` deliberately: a companion whose content diverged
 is kept and reported rather than overwritten (`--force` still wins), and a companion
 that vanished upstream is left behind rather than deleted, because a project may still
@@ -99,6 +115,14 @@ cannot tell them apart — the commit in the project's history can.
 `--force` overrides it. Keep the default non-destructive: a tool that silently deletes
 somebody's committed change while claiming to *fix* something is worse than one that
 leaves a stale link in place.
+
+A third cause reaches the same state from the other direction, and the wording does not
+fit it: the *source* was saved atomically, so it is a new inode with new content while
+every project still holds the old one. Those projects diverged from nothing — they were
+overtaken — but two files with two inodes and different content is all `sync` can see, so
+it keeps them, which is still the safe answer. The smoke tests pin both directions down
+("Following the source to a new inode"), because every other test in the suite breaks the
+link on the project's side and would not notice if the source-side path regressed.
 
 The flag parser builds an `args` array and must never expand it empty — `"${args[@]}"`
 under `set -u` on bash 3.2 is an unbound variable, which is why the call is guarded by a

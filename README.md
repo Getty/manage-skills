@@ -38,7 +38,8 @@ current.
 
 1. Each skill has exactly **one source of truth** — the project that owns it, or a
    shared directory.
-2. Every other project gets a **hardlink** to that source.
+2. Every other project gets the **whole skill directory hardlinked** from that source —
+   `SKILL.md`, `references/`, `scripts/`, every file in it.
 3. One CLI manages the links.
 
 Hardlinks are the trick. They're committable (Git sees a regular file), they stay in
@@ -180,16 +181,25 @@ name appears in two sources, the first one wins.
 
 ### Hardlinking
 
-`manage-skills link perl-moo` finds `perl-moo/SKILL.md` in your sources, creates
-`.claude/skills/perl-moo/` in the current project, and hardlinks the file into it —
-along with every other file in the skill's directory, `references/` and `templates/`
-included, so a relative link inside a SKILL.md still resolves in the project that
-received it.
+A skill is a **directory**, and the directory is what gets linked.
+`manage-skills link perl-moo` creates `.claude/skills/perl-moo/` in the current project
+and hardlinks every regular file from the source into it — `SKILL.md`, `references/`,
+`templates/`, `scripts/`, recreating subdirectories as it goes. So a relative link inside
+a `SKILL.md` still resolves in the project that received it, because the file it points
+at came too.
 
-- **On your machine**: editing either path changes both — same inode
-- **In Git**: a normal file, committed like any other
-- **For teammates**: an independent copy on clone; `manage-skills sync` relinks it to
+`SKILL.md` has no special status in this. It is what *identifies* a directory as a skill
+— which is why sources are scanned for it, and why a target definition names it — and
+then it is linked like everything else in the directory.
+
+- **On your machine**: editing any of those paths changes all of them — same inode
+- **In Git**: normal files, committed like any others
+- **For teammates**: independent copies on clone; `manage-skills sync` relinks them to
   their own sources
+
+Linked by an older version, so a project holds only its `SKILL.md`? `manage-skills sync`
+upgrades it in place: the rest of the directory is hardlinked in, subdirectories and all.
+Nothing to unlink first, no flag to remember.
 
 ### Drift on purpose
 
@@ -232,6 +242,33 @@ common case, where an `Edit` detached the inode without changing a word, and not
 be lost. A copy that reads *differently* is somebody's work, so it stays and gets named.
 `sync --force` is the deliberate override, for once the change has been taken upstream or
 discarded.
+
+### When the source is the one that moved
+
+`diverged` reads as "this project changed something", and most of the time that is what
+happened. The same report appears when nothing in the project changed at all: somebody
+saved the *source* in an editor that writes a temp file and renames it over the original.
+The source is then a new inode holding new content, every project still holds the old
+one, and `sync` sees precisely what it sees for a deliberate local edit — two files, two
+inodes, different content. It keeps the project's copy, because from the filesystem's
+side the two situations are the same shape.
+
+They are not the same thing, though. A project whose copy diverged has a commit that
+changed it; a project that was simply overtaken does not. `git log` on that file answers
+it in one line, and `sync --force` is right for the second case without any deliberation.
+
+The situation does not arise at all if the source is edited in place:
+
+```bash
+cat > ~/dev/shared-skills/perl-moo/SKILL.md <<'EOF'
+…
+EOF
+```
+
+That truncates and rewrites the same inode, so every project already has the new content
+and there is nothing to sync. It is the same rule that applies to a skill inside a
+project, for the same reason — see the [FAQ](#faq) on editing without breaking the other
+copies.
 
 ### Files only the project has
 
@@ -604,7 +641,9 @@ per tool, the hardlink mechanics don't.
 **How do I edit a skill without breaking every other copy?**
 Use `cat > file` or `cp new old`. Anything that saves by rename-and-replace — including
 most editors' "atomic save" — mints a new inode and silently strands every other
-project on the old content. The shipped `manage-skills` skill has the full rules.
+project on the old content. This holds for **every file in the skill directory**, not
+just `SKILL.md`: a `references/api.md` detaches the same way and just as quietly. The
+shipped `manage-skills` skill has the full rules.
 
 ## Requirements
 

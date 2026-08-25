@@ -223,6 +223,114 @@ else
 fi
 
 echo ""
+echo "Following the source to a new inode"
+# Everything above breaks the link on the project's side. The other direction
+# is the one that happens by itself: an editor saves the *source* atomically,
+# so the source is a new inode and every project is still holding the old one.
+OLD_INODE=$(inode "$SOURCE_DIR/test-skill/SKILL.md")
+
+# Same content, new inode — an atomic save that changed nothing. Relinking a
+# project onto it cannot lose anything, so sync does it unforced.
+cp "$SOURCE_DIR/test-skill/SKILL.md" "$TMPDIR_BASE/carry.md"
+rm "$SOURCE_DIR/test-skill/SKILL.md"
+mv "$TMPDIR_BASE/carry.md" "$SOURCE_DIR/test-skill/SKILL.md"
+NEW_INODE=$(inode "$SOURCE_DIR/test-skill/SKILL.md")
+if [ "$OLD_INODE" != "$NEW_INODE" ]; then
+  pass "source rewrite: the source really is a new inode"
+else
+  fail "source rewrite: the source really is a new inode" "still $OLD_INODE"
+fi
+if [ "$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")" = "$OLD_INODE" ]; then
+  pass "source rewrite: the project is left behind on the old inode"
+else
+  fail "source rewrite: the project is left behind on the old inode"
+fi
+assert_output_contains "relinked test-skill" "source rewrite: sync follows the source" \
+  "$MANAGE_SKILLS" sync
+if [ "$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")" = "$NEW_INODE" ]; then
+  pass "source rewrite: the project moved onto the new inode"
+else
+  fail "source rewrite: the project moved onto the new inode" \
+    "expected $NEW_INODE, got $(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")"
+fi
+
+# The same rewrite, but the content changed too. The project is stale, not
+# adapted — and nothing on disk says which, so sync applies the safe rule and
+# keeps it. Pinned down because this is the one case where "diverged" describes
+# the project's state wrongly: it never diverged, it was overtaken.
+rm "$SOURCE_DIR/test-skill/SKILL.md"
+echo "# Test Skill, rewritten upstream" > "$SOURCE_DIR/test-skill/SKILL.md"
+assert_output_contains "diverged" "source rewrite: a changed source reads as diverged" \
+  "$MANAGE_SKILLS" sync
+if grep -q "rewritten upstream" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"; then
+  fail "source rewrite: the stale project was overwritten unforced"
+else
+  pass "source rewrite: the stale project is kept until --force"
+fi
+"$MANAGE_SKILLS" sync --force >/dev/null 2>&1
+if grep -q "rewritten upstream" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"; then
+  pass "source rewrite: --force brings the project up to date"
+else
+  fail "source rewrite: --force brings the project up to date"
+fi
+
+echo ""
+echo "One inode, two projects"
+# What the tool is for, and untested until now: two projects holding the same
+# skill share one inode, so an in-place edit in either is already the other's
+# content — no sync, no copy step, nothing to remember to run.
+PROJECT2_DIR="$TMPDIR_BASE/project2"
+mkdir -p "$PROJECT2_DIR"
+cd "$PROJECT2_DIR"
+assert_exit 0 "two projects: link the same skill again" "$MANAGE_SKILLS" link test-skill
+if [ "$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")" = \
+     "$(inode "$PROJECT2_DIR/.claude/skills/test-skill/SKILL.md")" ]; then
+  pass "two projects: both hold the same inode"
+else
+  fail "two projects: both hold the same inode"
+fi
+
+# A shell redirect truncates in place, which is the whole reason the chain holds.
+cat > "$PROJECT2_DIR/.claude/skills/test-skill/SKILL.md" <<'SHARED'
+# Test Skill, edited from the second project
+SHARED
+if grep -q "second project" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"; then
+  pass "two projects: an in-place edit reaches the other project"
+else
+  fail "two projects: an in-place edit reaches the other project"
+fi
+if grep -q "second project" "$SOURCE_DIR/test-skill/SKILL.md"; then
+  pass "two projects: and the source"
+else
+  fail "two projects: and the source"
+fi
+assert_output_contains "0 copies" "two projects: check stays clean after an in-place edit" \
+  "$MANAGE_SKILLS" check
+
+# Replacing the file instead detaches only the project that did it. The other
+# one keeps the shared inode and never learns anything happened, which is the
+# failure check exists to make visible.
+rm "$PROJECT2_DIR/.claude/skills/test-skill/SKILL.md"
+echo "# Replaced, not truncated" > "$PROJECT2_DIR/.claude/skills/test-skill/SKILL.md"
+if grep -q "second project" "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md"; then
+  pass "two projects: a replace leaves the other project untouched"
+else
+  fail "two projects: a replace leaves the other project untouched"
+fi
+assert_output_contains "test-skill" "two projects: check reports the detached copy" \
+  "$MANAGE_SKILLS" check
+"$MANAGE_SKILLS" sync --force >/dev/null 2>&1
+if [ "$(inode "$PROJECT_DIR/.claude/skills/test-skill/SKILL.md")" = \
+     "$(inode "$PROJECT2_DIR/.claude/skills/test-skill/SKILL.md")" ]; then
+  pass "two projects: sync --force puts both back on one inode"
+else
+  fail "two projects: sync --force puts both back on one inode"
+fi
+
+"$MANAGE_SKILLS" unlink test-skill >/dev/null 2>&1 || true
+cd "$PROJECT_DIR"
+
+echo ""
 echo "Project-owned skills"
 # Regression: an original (a skill the project owns, provided by no source)
 # used to abort `check` — `grep` found nothing, `set -o pipefail` turned that
@@ -604,7 +712,7 @@ fi
 rm -f "$PROJECT_DIR/.claude/skills/deep-skill/references/two.md"
 cp "$COMPANION_SRC/deep-skill/references/two.md" \
    "$PROJECT_DIR/.claude/skills/deep-skill/references/two.md"
-assert_output_contains "companion files missing or copies" \
+assert_output_contains "files in it missing or copies" \
   "companions: check reports a detached companion" "$MANAGE_SKILLS" check
 assert_exit 0 "companions: sync runs" "$MANAGE_SKILLS" sync
 if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/two.md" 2>/dev/null)" = \
@@ -618,7 +726,7 @@ fi
 # same rule SKILL.md gets.
 rm -f "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md"
 echo "locally changed" > "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md"
-assert_output_contains "companion files differ" \
+assert_output_contains "files in it differ" \
   "companions: sync reports a diverged companion" "$MANAGE_SKILLS" sync
 if grep -q "locally changed" "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md"; then
   pass "companions: a diverged companion is kept"
@@ -631,6 +739,55 @@ if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md" 2>/dev/
   pass "companions: --force wins over a diverged companion"
 else
   fail "companions: --force wins over a diverged companion"
+fi
+
+# The upgrade path, and the reason any of this matters in an existing setup:
+# a project linked by an older version holds a properly hardlinked SKILL.md and
+# nothing else — the companions were never carried. sync has to turn that into a
+# fully linked directory on its own, recreating subdirectories that the project
+# never had, with no unlink and no flag.
+rm -rf "$PROJECT_DIR/.claude/skills/deep-skill/references"
+rm -rf "$PROJECT_DIR/.claude/skills/deep-skill/templates"
+if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/SKILL.md")" = \
+     "$(inode "$COMPANION_SRC/deep-skill/SKILL.md")" ]; then
+  pass "upgrade: the entry file is still hardlinked, as an old link would be"
+else
+  fail "upgrade: the entry file is still hardlinked, as an old link would be"
+fi
+assert_output_contains "files in it missing or copies" \
+  "upgrade: check reports a SKILL.md-only link as incomplete" "$MANAGE_SKILLS" check
+assert_exit 0 "upgrade: sync runs" "$MANAGE_SKILLS" sync
+if [ -d "$PROJECT_DIR/.claude/skills/deep-skill/references" ] && \
+   [ -d "$PROJECT_DIR/.claude/skills/deep-skill/templates" ]; then
+  pass "upgrade: sync recreates subdirectories the project never had"
+else
+  fail "upgrade: sync recreates subdirectories the project never had"
+fi
+UPGRADE_MISMATCH=0
+for rel in references/one.md references/two.md references/three.md templates/thing.txt; do
+  if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/$rel" 2>/dev/null)" != \
+       "$(inode "$COMPANION_SRC/deep-skill/$rel")" ]; then
+    UPGRADE_MISMATCH=$((UPGRADE_MISMATCH + 1))
+  fi
+done
+if [ "$UPGRADE_MISMATCH" -eq 0 ]; then
+  pass "upgrade: every companion is hardlinked to the source afterwards"
+else
+  fail "upgrade: every companion is hardlinked to the source afterwards" \
+    "$UPGRADE_MISMATCH of 4 companions are not"
+fi
+assert_output_contains "0 copies" "upgrade: check is clean once sync has run" \
+  "$MANAGE_SKILLS" check
+
+# link is the other way in, for anyone who reaches for it instead of sync.
+rm -rf "$PROJECT_DIR/.claude/skills/deep-skill/references"
+assert_exit 0 "upgrade: link repairs a SKILL.md-only link too" \
+  "$MANAGE_SKILLS" link deep-skill
+if [ "$(inode "$PROJECT_DIR/.claude/skills/deep-skill/references/one.md" 2>/dev/null)" = \
+     "$(inode "$COMPANION_SRC/deep-skill/references/one.md")" ]; then
+  pass "upgrade: link restores the companions as hardlinks"
+else
+  fail "upgrade: link restores the companions as hardlinks"
 fi
 
 # Files only the project has. Two ways in: somebody added one to the linked
