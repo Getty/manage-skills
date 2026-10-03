@@ -1139,10 +1139,12 @@ else
 fi
 
 # bin/manage-skills goes on the Bash tool's PATH when the plugin is enabled.
-if [ -L "$REPO_DIR/bin/manage-skills" ] && [ -x "$REPO_DIR/bin/manage-skills" ]; then
-  pass "bin/manage-skills is a working relative symlink"
+# A script, not a symlink: a Windows checkout turns a symlink into a text file.
+if [ ! -L "$REPO_DIR/bin/manage-skills" ] && [ -x "$REPO_DIR/bin/manage-skills" ] \
+   && [ "$("$REPO_DIR/bin/manage-skills" --help 2>&1)" = "$("$MANAGE_SKILLS" --help 2>&1)" ]; then
+  pass "bin/manage-skills is a script that runs manage-skills"
 else
-  fail "bin/manage-skills is a working relative symlink"
+  fail "bin/manage-skills is a script that runs manage-skills"
 fi
 
 echo ""

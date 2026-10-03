@@ -90,6 +90,12 @@ cd manage-skills
 brew install Getty/manage-skills/manage-skills
 ```
 
+**Windows**: manage-skills is a Bash program and runs in Git Bash (Git for
+Windows) — which is also the shell Claude Code's Bash tool uses there, so the
+plugin route works as is. Hardlinks are NTFS hardlinks and behave as on Linux,
+within one drive; across drives `ln` fails as it does across filesystems. Not
+supported from PowerShell or cmd, nor on a Windows without Git Bash.
+
 ## Quick Start
 
 ```bash

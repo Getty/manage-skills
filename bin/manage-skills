@@ -1,1 +1,12 @@
-../manage-skills
+#!/usr/bin/env bash
+# bin/manage-skills goes on the Bash tool's PATH when the plugin is enabled. A
+# script rather than a symlink, so a Windows checkout (Git Bash) gets a file
+# that works; it runs the manage-skills next to this directory, following
+# symlinks to this file on the way.
+src=${BASH_SOURCE[0]}
+while [[ -L $src ]]; do
+  dir=$(cd -P "$(dirname "$src")" && pwd)
+  src=$(readlink "$src")
+  [[ $src != /* ]] && src=$dir/$src
+done
+exec bash "$(cd -P "$(dirname "$src")" && pwd)/../manage-skills" "$@"
