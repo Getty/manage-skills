@@ -78,6 +78,17 @@ jobs:
           grep -q "\"version\": \"${NEW_VERSION}\"" .claude-plugin/plugin.json
           grep -q "\"version\": \"${NEW_VERSION}\"" .codex-plugin/plugin.json
 
+          # Changes is kept the way Dist::Zilla keeps it: what sits under the
+          # {{$NEXT}} line becomes this release, and the line stays on top for
+          # the next one. The smoke tests fail when the line is missing.
+          STAMP=$(printf '%-9s %s' "${NEW_VERSION}" "$(date -u '+%Y-%m-%d %H:%M:%SZ')")
+          awk -v stamp="${STAMP}" '
+            $0 == "{{$NEXT}}" && !done { print; print ""; print stamp; done = 1; next }
+            { print }
+            END { if (!done) exit 1 }
+          ' Changes > Changes.new
+          mv Changes.new Changes
+
           if git diff --quiet; then
             echo "VERSION already in sync, nothing to commit"
             exit 0
@@ -92,8 +103,19 @@ jobs:
       - name: Generate release notes
         if: steps.version.outputs.new_tag
         run: |
-          RANGE="${{ steps.bump.outputs.commit_range }}"
-          git log ${RANGE} --pretty=format:"- %s" > /tmp/release_notes.md
+          NEW_VERSION="${{ steps.version.outputs.new_tag }}"
+          NEW_VERSION="${NEW_VERSION#v}"
+          # The entries of this version in Changes; the commit subjects when
+          # it has none.
+          awk -v v="${NEW_VERSION}" '
+            $1 == v { on = 1; next }
+            on && /^[0-9{]/ { exit }
+            on { sub(/^  /, ""); print }
+          ' Changes > /tmp/release_notes.md
+          if ! grep -q '[^[:space:]]' /tmp/release_notes.md; then
+            RANGE="${{ steps.bump.outputs.commit_range }}"
+            git log ${RANGE} --pretty=format:"- %s" > /tmp/release_notes.md
+          fi
 
       - name: Create release
         if: steps.version.outputs.new_tag

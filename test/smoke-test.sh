@@ -1147,6 +1147,13 @@ else
   fail "bin/manage-skills is a script that runs manage-skills"
 fi
 
+# The release workflow turns the {{$NEXT}} line of Changes into the version line.
+if grep -qx '{{$NEXT}}' "$REPO_DIR/Changes"; then
+  pass "Changes carries the {{\$NEXT}} line the release workflow stamps"
+else
+  fail "Changes carries the {{\$NEXT}} line the release workflow stamps"
+fi
+
 echo ""
 echo "Error handling"
 assert_exit 1 "unknown command fails" "$MANAGE_SKILLS" bogus-command
