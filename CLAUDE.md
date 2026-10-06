@@ -343,3 +343,8 @@ Commits are conventional (`feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:`) an
 `--signoff`. Merging to `main` cuts a SemVer release from those prefixes, and the release
 job rewrites the version in the script and in `plugin.json` to match the new tag — leave
 those two lines to the workflow.
+
+`Changes` is the changelog, in the CPAN format. A user-visible change gets its entry
+under the `{{$NEXT}}` line in the commit that makes it. The release job turns that
+section into the release's version line and its release notes and leaves `{{$NEXT}}`
+on top — never write a version line by hand.

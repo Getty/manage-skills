@@ -1,0 +1,55 @@
+Revision history for manage-skills
+
+{{$NEXT}}
+
+0.11.2    2026-10-06 15:58:12Z
+  - Works from a Windows checkout under Git Bash: `bin/manage-skills` is a
+    script instead of a symlink.
+
+0.11.1    2026-08-25 14:54:22Z
+  - Every install route is registered and reported correctly.
+
+0.11.0    2026-08-25 04:07:08Z
+  - Reports files a project has that no source does.
+
+0.10.0    2026-08-22 04:33:43Z
+  - The numbered menu takes several numbers at once.
+
+0.9.0     2026-08-22 04:20:27Z
+  - A bare owner name resolves to that owner's skills repo.
+  - Every file in a skill directory is linked, not just `SKILL.md`.
+
+0.8.1     2026-08-19 03:55:37Z
+  - Symlinked skill directories are skipped during discovery.
+  - Grouped skills are discovered in local sources too.
+
+0.8.0     2026-08-18 05:08:38Z
+  - Diverged copies are kept unless `sync` is forced.
+
+0.7.1     2026-08-18 03:58:29Z
+  - The Codex manifest is bumped with every release.
+
+0.7.0     2026-08-18 03:56:22Z
+  - manage-skills ships to Codex as well.
+
+0.6.0     2026-08-18 03:18:57Z
+  - Skills that a source groups into subdirectories are found.
+
+0.5.0     2026-08-18 01:16:33Z
+  - Serves Codex too: the same skills directory, a second manifest.
+  - `package` makes a skill set installable by people who do not use
+    manage-skills.
+
+0.4.0     2026-08-18 01:15:22Z
+  - Remote sources, so skills can be shared without Claude Code.
+
+0.3.0     2026-08-18 01:13:27Z
+  - Ships as a Claude Code plugin and marketplace.
+  - Listings are laid out in columns; `locations` and `self` are new.
+  - `shorten()` no longer emits a literal backslash on bash 3.2.
+  - Four failures the test suite was hiding are corrected.
+
+0.2.0     2026-05-07 15:48:48Z
+  - First tagged release: hardlink-based skill sharing across projects, with
+    CI, the release workflow and smoke tests.
+  - Runs on bash 3.2: no associative arrays.
